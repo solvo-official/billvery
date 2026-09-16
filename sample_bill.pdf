@@ -1,0 +1,35 @@
+%PDF-1.4
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >> endobj
+4 0 obj << /Length 401 >>
+stream
+BT
+/F1 14 Tf
+50 720 Td (INVOICE #INV-9901) Tj
+0 -25 Td (Vendor: Global Tech Ltd) Tj
+0 -20 Td (Tax ID: US-1234567) Tj
+0 -20 Td (Date: 2026-09-12) Tj
+0 -35 Td (1. Cloud Hosting - 400.00 USD) Tj
+0 -20 Td (2. SSL Certificate - 50.00 USD) Tj
+0 -35 Td (Subtotal: 450.00 USD) Tj
+0 -20 Td (Tax: 45.00 USD) Tj
+0 -20 Td (Shipping: 0.00 USD) Tj
+0 -20 Td (Discount: 0.00 USD) Tj
+0 -20 Td (Total: 495.00 USD) Tj
+ET
+endstream
+endobj
+5 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj
+xref
+0 6
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000115 00000 n 
+0000000261 00000 n 
+0000000620 00000 n 
+trailer << /Size 6 /Root 1 0 R >>
+startxref
+700
+%%EOF

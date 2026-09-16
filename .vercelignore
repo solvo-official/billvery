@@ -1,0 +1,14 @@
+# Kept out of the deployment entirely (the function bundle also excludes these via vercel.json).
+.venv/
+data/
+evil_invoices/
+tests/
+*.pdf
+frontend/dist/
+frontend/node_modules/
+**/__pycache__/
+.pytest_cache/
+
+# Never ship local secrets into a deployment bundle.
+.env
+.env.local
