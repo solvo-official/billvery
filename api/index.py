@@ -95,11 +95,16 @@ def _unavailable_app(reason: str):
     return application
 
 
-try:
-    from invoice_auditor.main import create_app
+def _load_app():
+    try:
+        from invoice_auditor.main import create_app
 
-    # Vercel looks for a top-level ASGI application called `app`.
-    app = create_app()
-except Exception as exc:  # noqa: BLE001 - any startup failure is reported rather than crashing
-    print(_scrub("API startup failed:\n" + "".join(traceback.format_exception(exc))), file=sys.stderr, flush=True)
-    app = _unavailable_app(_describe(exc))
+        return create_app()
+    except Exception as exc:  # noqa: BLE001 - any startup failure is reported rather than crashing
+        print(_scrub("API startup failed:\n" + "".join(traceback.format_exception(exc))), file=sys.stderr, flush=True)
+        return _unavailable_app(_describe(exc))
+
+
+# Vercel only turns /api files into functions when static analysis finds a top-level `app`, so
+# the assignment stays a plain module-level statement rather than moving inside the try above.
+app = _load_app()
