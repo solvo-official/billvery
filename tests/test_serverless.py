@@ -104,7 +104,56 @@ def test_vercel_defaults_fit_the_platform():
 def test_migrations_prefer_the_direct_endpoint():
     both = settings(database_url=NEON_POOLED, database_url_unpooled=NEON_DIRECT)
     assert both.migration_database_url == NEON_DIRECT
-    assert settings(database_url=NEON_POOLED).migration_database_url == NEON_POOLED
+    # Only the pooled URL configured: its direct twin is derived.
+    derived = settings(database_url=NEON_POOLED).migration_database_url
+    assert "-pooler" not in derived and "ep-quiet-bird-12345.us-east-1.aws.neon.tech" in derived
+    assert "secret" in derived and "sslmode=require" in derived  # credentials and TLS kept
+    plain = "postgresql+asyncpg://u:p@localhost/db"
+    assert settings(database_url=plain).migration_database_url == plain
+
+
+def test_vercel_entrypoint_reports_startup_failures_without_secrets(monkeypatch):
+    """A misconfigured deployment answers 503 with the reason instead of crashing opaquely."""
+    import asyncio
+    import importlib.util
+    from pathlib import Path
+
+    import httpx
+
+    from invoice_auditor.config import get_settings
+
+    def load():
+        get_settings.cache_clear()
+        spec = importlib.util.spec_from_file_location("vercel_index", Path(__file__).parent.parent / "api" / "index.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    async def healthz(module):
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=module.app), base_url="https://x.vercel.app") as client:
+            return await client.get("/healthz")
+
+    for key in ("DATABASE_URL", "JWT_SECRET", "DATABASE_URL_UNPOOLED"):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.chdir(Path(__file__).parent)  # no .env here
+    try:
+        monkeypatch.setenv("VERCEL", "1")
+        response = asyncio.run(healthz(load()))
+        assert response.status_code == 503
+        assert response.json()["error"] == {"code": "startup_failed", "message": "DATABASE_URL is not set", "details": None}
+
+        monkeypatch.setenv("DATABASE_URL", "postgresql://neondb_owner:hunter2-password@ep-x-pooler.aws.neon.tech/db")
+        monkeypatch.setenv("JWT_SECRET", "short-but-secret-value")
+        body = asyncio.run(healthz(load())).text
+        assert "JWT_SECRET" in body and "at least 32" in body
+        assert "short-but-secret-value" not in body and "hunter2-password" not in body
+
+        monkeypatch.setenv("JWT_SECRET", "x" * 40)
+        monkeypatch.setenv("DATABASE_URL", '"postgresql://neondb_owner:hunter2-password@ep-x-pooler.aws.neon.tech/db"')
+        body = asyncio.run(healthz(load())).text
+        assert "could not be parsed" in body and "hunter2-password" not in body
+    finally:
+        get_settings.cache_clear()
 
 
 def test_public_base_url_falls_back_to_the_vercel_domain():

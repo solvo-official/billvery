@@ -111,8 +111,21 @@ class Settings(BaseSettings):
 
     @property
     def migration_database_url(self) -> str | None:
-        """Migrations prefer the direct endpoint: DDL and a transaction pooler mix badly."""
-        return self.database_url_unpooled or self.database_url
+        """Migrations prefer the direct endpoint: DDL and a transaction pooler mix badly.
+
+        Without DATABASE_URL_UNPOOLED, a Neon pooler URL is turned into its direct twin: Neon's
+        pooled host is the direct host with `-pooler` appended to the endpoint id.
+        """
+        if self.database_url_unpooled:
+            return self.database_url_unpooled
+        if not self.database_url:
+            return None
+        from sqlalchemy.engine import make_url
+
+        url = make_url(self.database_url)
+        if url.host and "-pooler." in url.host:
+            return url.set(host=url.host.replace("-pooler.", ".", 1)).render_as_string(hide_password=False)
+        return self.database_url
 
     @property
     def base_url(self) -> str | None:
