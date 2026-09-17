@@ -7,6 +7,7 @@ back into the app. Integrations keep using API keys and never touch these routes
 
 import logging
 import secrets
+from datetime import UTC, datetime
 from typing import Annotated
 from urllib.parse import urlencode
 
@@ -138,6 +139,7 @@ async def google_callback(
         return _fail(base_url, "not_invited")
     if not user.full_name and identity.get("name"):
         user.full_name = str(identity["name"])[:150]
+    user.last_login_at = datetime.now(UTC)
     await session.commit()
 
     token, _expires_at = issue_session(settings, user)

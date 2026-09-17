@@ -1,12 +1,14 @@
 import { useCallback, useSyncExternalStore } from "react";
 
-/** The console's two workspaces, addressable by URL hash so reloads and links keep the view. */
-export type View = "review" | "approved";
+/** The console's workspaces, addressable by URL hash so reloads and links keep the view. */
+export type View = "review" | "approved" | "team";
 
-const HASH: Record<View, string> = { review: "#/review", approved: "#/approved" };
+const HASH: Record<View, string> = { review: "#/review", approved: "#/approved", team: "#/team" };
 
 function parse(hash: string): View {
-  return hash.startsWith("#/approved") ? "approved" : "review";
+  if (hash.startsWith("#/approved")) return "approved";
+  if (hash.startsWith("#/team")) return "team";
+  return "review";
 }
 
 function subscribe(onChange: () => void) {

@@ -72,7 +72,8 @@ type Action =
   | { type: "archive/failure"; error: ApiError }
   | { type: "sync/result"; error: ApiError | null }
   | { type: "live/set"; live: boolean }
-  | { type: "reviewer/set"; reviewerId: string };
+  | { type: "reviewer/set"; reviewerId: string }
+  | { type: "users/set"; users: User[] };
 
 const byNewest = (a: InvoiceRecord, b: InvoiceRecord) => b.created_at.localeCompare(a.created_at);
 const stamp = (at: string) => Date.parse(at) || 0;
@@ -151,6 +152,8 @@ function reducer(state: AuditState, action: Action): AuditState {
       return { ...state, live: action.live };
     case "reviewer/set":
       return { ...state, reviewerId: action.reviewerId };
+    case "users/set":
+      return { ...state, users: action.users };
   }
 }
 
@@ -189,6 +192,8 @@ interface AuditStore {
   maxUploadBytes: number;
   /** Ends the browser session and returns to the sign-in page. */
   signOut: () => void;
+  /** Re-read the active members after a team change, so names and reviewers stay current. */
+  reloadUsers: () => Promise<void>;
   invoices: InvoiceRecord[];
   touched: Record<string, number>;
   pending: Record<string, true>;
@@ -361,6 +366,13 @@ export function AuditStoreProvider({ children }: { children: ReactNode }) {
           ? "Your role can view invoices but not approve them."
           : "Choose who you're acting as in the top-right menu.",
       maxUploadBytes: state.health?.limits.max_upload_bytes ?? MAX_UPLOAD_BYTES,
+      reloadUsers: async () => {
+        try {
+          dispatch({ type: "users/set", users: await api.users() });
+        } catch {
+          // The next reconnect refreshes the list; team changes themselves already succeeded.
+        }
+      },
       signOut: () => {
         void api.logout().finally(() => window.location.reload());
       },

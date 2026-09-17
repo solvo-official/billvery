@@ -15,7 +15,9 @@
 import {
   INVOICE_STATUSES,
   type ApproveInvoiceRequest,
+  type InviteUserRequest,
   type Session,
+  type UpdateUserRequest,
   type Health,
   type InvoicePage,
   type InvoiceRecord,
@@ -164,6 +166,11 @@ function users(value: unknown): User[] {
   return value as User[];
 }
 
+function member(value: unknown): User {
+  if (!isObject(value) || typeof value.id !== "string" || typeof value.email !== "string") malformed("team member");
+  return value as unknown as User;
+}
+
 function health(value: unknown): Health {
   if (!isObject(value) || !isObject(value.extraction)) malformed("health check");
   return value as unknown as Health;
@@ -229,6 +236,16 @@ export const api = {
   organization: () => request("/api/v1/organization", undefined, organization),
 
   users: () => request("/api/v1/users", undefined, users),
+
+  /** Everyone on the team, including people whose access was removed. */
+  teamMembers: (signal?: AbortSignal) => request("/api/v1/users?include_inactive=true", { signal, cache: "no-store" }, users),
+
+  /** Invite a Google account (owners and admins). No email is sent; they sign in with Google. */
+  inviteMember: (body: InviteUserRequest) => request("/api/v1/users", json(body), member),
+
+  /** Change a person's role, or remove / restore their access (owners and admins). */
+  updateMember: (userId: string, body: UpdateUserRequest) =>
+    request(`/api/v1/users/${userId}`, { ...json(body), method: "PATCH" }, member),
 
   invoices: (params: ListParams, signal?: AbortSignal) => request(`/api/v1/invoices${query(params)}`, { signal }, invoicePage),
 

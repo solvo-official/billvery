@@ -146,12 +146,30 @@ export interface Organization {
   subscription_plan: string;
 }
 
+export type Role = "owner" | "admin" | "reviewer" | "member";
+
 export interface User {
   id: Uuid;
   name: string;
   email: string;
-  role: "owner" | "admin" | "reviewer" | "member";
+  role: Role;
   can_resolve: boolean;
+  /** false once an owner or admin removed the person's access */
+  active: boolean;
+  /** last Google sign-in; null for an invited person who hasn't signed in yet */
+  last_login_at: IsoDateTime | null;
+}
+
+/** POST /api/v1/users: the Google account can sign in as soon as this succeeds. */
+export interface InviteUserRequest {
+  email: string;
+  role: Role;
+}
+
+/** PATCH /api/v1/users/{id} */
+export interface UpdateUserRequest {
+  role?: Role;
+  active?: boolean;
 }
 
 export interface Health {

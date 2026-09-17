@@ -1,4 +1,5 @@
 import json
+import re
 from collections.abc import Iterable
 from datetime import date, datetime
 from typing import Any, Literal
@@ -299,11 +300,49 @@ class UserOut(BaseModel):
     email: str
     role: UserRole
     can_resolve: bool
+    active: bool = Field(True, description="False once an owner or admin removed the person's access.")
+    last_login_at: datetime | None = Field(None, description="Last Google sign-in; null for someone invited who hasn't signed in yet.")
 
     @classmethod
     def from_model(cls, user: User) -> "UserOut":
         role = UserRole(user.role)
-        return cls(id=user.id, name=display_name(user), email=user.email, role=role, can_resolve=role.can_resolve_anomalies)
+        return cls(
+            id=user.id,
+            name=display_name(user),
+            email=user.email,
+            role=role,
+            can_resolve=role.can_resolve_anomalies,
+            active=user.is_active,
+            last_login_at=user.last_login_at,
+        )
+
+
+_EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+class InviteUserRequest(BaseModel):
+    """Give a Google account access: it can sign in as soon as this returns."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    email: str = Field(..., max_length=255, description="The Google account's email address, e.g. name@gmail.com.")
+    role: UserRole = Field(UserRole.REVIEWER, description="owner, admin, reviewer or member.")
+    name: str | None = Field(None, max_length=150, description="Optional; filled from Google on first sign-in.")
+
+    @field_validator("email")
+    @classmethod
+    def _valid_email(cls, value: str) -> str:
+        email = value.lower()
+        if not _EMAIL.fullmatch(email):
+            raise ValueError("enter a valid email address")
+        return email
+
+
+class UpdateUserRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    role: UserRole | None = None
+    active: bool | None = Field(None, description="false removes access; true restores it.")
 
 
 class ExtractionHealth(BaseModel):

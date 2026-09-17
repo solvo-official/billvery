@@ -5,6 +5,7 @@ import { ReviewView } from "@/components/review/ReviewView";
 import { DashboardSkeleton, StatsSkeleton, TableSkeleton } from "@/components/shell/DashboardSkeleton";
 import { PageHeaderSkeleton } from "@/components/shell/PageHeader";
 import { SignIn } from "@/components/shell/SignIn";
+import { TeamView } from "@/components/team/TeamView";
 import { TopBar } from "@/components/shell/TopBar";
 import { Button } from "@/components/ui/button";
 import { ErrorBoundary } from "@/components/ui/error-boundary";
@@ -62,9 +63,9 @@ function Console() {
       <TopBar />
       <ErrorBoundary label="This workspace" resetKeys={[view, connection.status]} className="m-4 sm:m-6">
         {connection.status === "ready" ? (
-          view === "approved" ? <ApprovedBillsView /> : <ReviewView />
+          view === "approved" ? <ApprovedBillsView /> : view === "team" ? <TeamView /> : <ReviewView />
         ) : connection.status === "connecting" ? (
-          view === "approved" ? <ArchiveSkeleton /> : <DashboardSkeleton />
+          view === "review" ? <DashboardSkeleton /> : <ArchiveSkeleton />
         ) : connection.status === "signed-out" ? (
           <SignIn googleLogin={connection.googleLogin} />
         ) : (

@@ -1,4 +1,4 @@
-import { Archive, Check, ChevronDown, Copy, Inbox, LogOut, Monitor, Moon, Sun, UserCheck, type LucideIcon } from "lucide-react";
+import { Archive, Check, ChevronDown, Copy, Inbox, LogOut, Monitor, Moon, Sun, UserCheck, Users, type LucideIcon } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Avatar } from "@/components/audit/status";
 import {
@@ -60,12 +60,13 @@ function Brand() {
 const NAV: { view: View; label: string; icon: LucideIcon }[] = [
   { view: "review", label: "Review", icon: Inbox },
   { view: "approved", label: "Approved Bills", icon: Archive },
+  { view: "team", label: "Team", icon: Users },
 ];
 
 /** Workspace tabs, underlined like a document's section tabs. Counts update with every approval. */
 function PrimaryNav() {
   const { view, href } = useRoute();
-  const { connection, invoices, archive } = useAudit();
+  const { connection, invoices, archive, users } = useAudit();
   const ready = connection.status === "ready";
   let review = 0;
   let approved = 0;
@@ -77,6 +78,7 @@ function PrimaryNav() {
   const counts: Record<View, number | null> = {
     review: ready ? review : null,
     approved: ready && (archive.status === "ready" || archive.status === "error") ? approved : null,
+    team: ready ? users.length : null,
   };
 
   return (
@@ -104,9 +106,9 @@ function PrimaryNav() {
                   key={count}
                   className={cn(
                     "figure inline-flex h-[18px] min-w-6 animate-pop-in items-center justify-center rounded-full px-1.5 text-[11px]",
-                    target === "review" && count > 0 ? "bg-review/15 text-review" : target === "approved" ? "bg-approved/12 text-approved" : "bg-ink-3/10 text-ink-3",
+                    target === "review" && count > 0 ? "bg-review/15 text-review" : target === "approved" ? "bg-approved/12 text-approved" : "bg-ink-3/10 text-ink-2",
                   )}
-                  aria-label={`${count} ${target === "review" ? "waiting for review" : "approved"}`}
+                  aria-label={`${count} ${target === "review" ? "waiting for review" : target === "approved" ? "approved" : "with access"}`}
                 >
                   {count.toLocaleString()}
                 </span>
@@ -151,7 +153,7 @@ function OrganizationMenu() {
         </div>
         <DropdownMenuSeparator />
         <p className="px-2 py-1.5 text-[11px] leading-snug text-ink-3">
-          This console acts for the organization that owns the API key configured on its server.
+          Manage who can sign in from the Team page.
         </p>
         <p className="px-2 pb-1.5 text-[11px] text-ink-3">
           Tenant <span className="figure text-ink-2">{organization.id}</span>
