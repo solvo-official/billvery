@@ -338,6 +338,42 @@ class InviteUserRequest(BaseModel):
         return email
 
 
+class WorkspaceOut(BaseModel):
+    """A workspace the signed-in Google account belongs to."""
+
+    organization: OrganizationOut
+    role: UserRole | None = Field(description="Your role there; null when an API key authenticated.")
+    current: bool
+
+
+class SwitchWorkspaceRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    organization_id: UUID
+
+
+class CreateWorkspaceRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    name: str | None = Field(None, min_length=1, max_length=255, description="Defaults to \"<first name>'s workspace\".")
+
+
+class UpdateOrganizationRequest(BaseModel):
+    """Workspace settings owners and admins can change."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    name: str | None = Field(None, min_length=1, max_length=255)
+    legal_name: str | None = Field(None, max_length=255)
+    country_code: str | None = Field(None, pattern=r"^[A-Za-z]{2}$", description="ISO 3166-1 alpha-2, e.g. PK.")
+    currency_code: str | None = Field(None, pattern=r"^[A-Za-z]{3}$", description="ISO 4217, e.g. PKR.")
+
+    @field_validator("country_code", "currency_code")
+    @classmethod
+    def _upper(cls, value: str | None) -> str | None:
+        return value.upper() if value else value
+
+
 class UpdateUserRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

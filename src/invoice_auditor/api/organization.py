@@ -8,7 +8,14 @@ from sqlalchemy.exc import IntegrityError
 from ..enums import ApiScope, UserRole
 from ..errors import Conflict, Forbidden, NotFound
 from ..models import Organization, User
-from ..schemas.api import ErrorResponse, InviteUserRequest, OrganizationOut, UpdateUserRequest, UserOut
+from ..schemas.api import (
+    ErrorResponse,
+    InviteUserRequest,
+    OrganizationOut,
+    UpdateOrganizationRequest,
+    UpdateUserRequest,
+    UserOut,
+)
 from .deps import Principal, SessionDep, require_scope
 
 router = APIRouter(prefix="/api/v1", tags=["organization"])
@@ -62,6 +69,20 @@ def _guard_owner_changes(manager: User, *, target_role: UserRole, new_role: User
         return
     if target_role is UserRole.OWNER or new_role is UserRole.OWNER:
         raise Forbidden("Only an owner can add, change or remove owners.")
+
+
+@router.patch("/organization", response_model=OrganizationOut, responses={403: {"model": ErrorResponse}})
+async def update_organization(payload: UpdateOrganizationRequest, manager: ManagerDep, session: SessionDep) -> OrganizationOut:
+    """Rename the workspace or change its country and reporting currency (owners and admins)."""
+    organization = await session.get(Organization, manager.organization_id)
+    if organization is None:
+        raise NotFound("Organization not found.")
+    for field, value in payload.model_dump(exclude_unset=True).items():
+        if field in ("name", "currency_code") and not value:
+            continue  # a workspace always keeps a name and a reporting currency
+        setattr(organization, field, value or None)
+    await session.commit()
+    return OrganizationOut.from_model(organization)
 
 
 @router.post(

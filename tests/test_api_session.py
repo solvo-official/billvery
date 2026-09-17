@@ -193,7 +193,7 @@ async def test_callback_refuses_bad_returns(client, google, params, reason):
     assert not client.cookies.get(google.session_cookie_name)
 
 
-async def test_callback_refuses_an_address_without_an_account(client, google, monkeypatch):
+async def test_callback_gives_a_new_address_its_own_workspace(client, db, google, monkeypatch):
     async def fake_exchange(settings, **_kwargs):
         return {"email": "stranger@example.com", "name": "Stranger", "sub": "google-999"}
 
@@ -201,8 +201,9 @@ async def test_callback_refuses_an_address_without_an_account(client, google, mo
     start = await client.get("/api/v1/auth/google/login", follow_redirects=False)
     state = dict(pair.split("=", 1) for pair in start.headers["location"].split("?", 1)[1].split("&"))["state"]
     response = await client.get("/api/v1/auth/google/callback", params={"code": "c", "state": state}, follow_redirects=False)
-    assert response.headers["location"] == "http://testserver/?auth_error=not_invited"
-    assert not client.cookies.get(google.session_cookie_name)
+    assert response.headers["location"] == "http://testserver/"
+    me = (await client.get("/api/v1/auth/session")).json()
+    assert me["user"]["role"] == "owner" and me["organization"]["name"] == "Stranger's workspace"
 
 
 async def test_callback_without_a_state_cookie_is_refused(client, google):

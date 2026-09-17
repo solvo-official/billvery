@@ -3,6 +3,9 @@
 The flow is: the console sends the person to `/api/v1/auth/google/login`, Google returns them to
 `/api/v1/auth/google/callback`, and this service sets an HttpOnly session cookie and redirects
 back into the app. Integrations keep using API keys and never touch these routes.
+
+Every Google account works in a workspace of its own: signing in without any membership creates
+one, and people invited elsewhere can switch between the workspaces they belong to.
 """
 
 import logging
@@ -16,9 +19,18 @@ from fastapi.responses import RedirectResponse
 from sqlalchemy import select
 
 from ..auth import SignInError, exchange_code, issue_session, read_state, safe_next_path, start_login
-from ..errors import NotFound, ServiceUnavailable
+from ..errors import AppError, Forbidden, NotFound, ServiceUnavailable
 from ..models import Organization, User
-from ..schemas.api import ErrorResponse, OrganizationOut, SessionOut, UserOut
+from ..schemas.api import (
+    CreateWorkspaceRequest,
+    ErrorResponse,
+    OrganizationOut,
+    SessionOut,
+    SwitchWorkspaceRequest,
+    UserOut,
+    WorkspaceOut,
+)
+from ..services.workspaces import active_memberships, create_workspace, lock_account
 from .deps import Principal, SessionDep, SettingsDep, get_principal
 
 logger = logging.getLogger(__name__)
@@ -126,17 +138,20 @@ async def google_callback(
     except ServiceUnavailable:
         return _fail(base_url, "not_configured")
 
-    # Invite-only: the address must already belong to an active user of an active organization.
-    user = await session.scalar(
-        select(User)
-        .join(Organization, Organization.id == User.organization_id)
-        .where(User.email == identity["email"], User.is_active.is_(True), Organization.is_active.is_(True))
-        .order_by(User.created_at)
-        .limit(1)
-    )
-    if user is None:
-        logger.info("sign-in refused for %s: no active user with that address", identity["email"])
-        return _fail(base_url, "not_invited")
+    # Back into the workspace used most recently, or a new private one for a first sign-in.
+    await lock_account(session, identity["email"])
+    memberships = await active_memberships(session, identity["email"])
+    if memberships:
+        user = memberships[0]
+    else:
+        try:
+            user = await create_workspace(session, settings, email=identity["email"], display_name=identity.get("name"))
+        except Forbidden:
+            logger.info("sign-in refused for %s: not on SIGNUP_ALLOWLIST and not invited anywhere", identity["email"])
+            return _fail(base_url, "signup_closed")
+        except AppError:
+            return _fail(base_url, "workspace_limit")
+        logger.info("created a workspace for %s", identity["email"])
     if not user.full_name and identity.get("name"):
         user.full_name = str(identity["name"])[:150]
     user.last_login_at = datetime.now(UTC)
@@ -156,6 +171,105 @@ async def google_callback(
     response.delete_cookie(STATE_COOKIE, path=STATE_COOKIE_PATH)
     logger.info("signed in %s (%s)", user.email, user.id)
     return response
+
+
+# --- Workspaces ------------------------------------------------------------------------------
+
+
+def _set_session_cookie(response: Response, request: Request, settings: SettingsDep, user: User) -> None:
+    token, _expires_at = issue_session(settings, user)
+    response.set_cookie(
+        settings.session_cookie_name,
+        token,
+        max_age=settings.session_ttl_hours * 3600,
+        httponly=True,
+        secure=_secure(_base_url(request, settings)),
+        samesite="lax",
+        path="/",
+    )
+
+
+async def _signed_in_user(principal: Principal, session: SessionDep) -> User:
+    if principal.user_id is None:
+        raise Forbidden("Sign in with Google to use workspaces.")
+    user = await session.get(User, principal.user_id)
+    if user is None:
+        raise NotFound("Your account no longer exists.")
+    return user
+
+
+@router.get("/workspaces", response_model=list[WorkspaceOut])
+async def list_workspaces(principal: Annotated[Principal, Depends(get_principal)], session: SessionDep) -> list[WorkspaceOut]:
+    """The workspaces the signed-in Google account belongs to, most recently used first."""
+    if principal.user_id is None:
+        organization = await session.get(Organization, principal.organization_id)
+        return [WorkspaceOut(organization=OrganizationOut.from_model(organization), role=None, current=True)] if organization else []
+    me = await _signed_in_user(principal, session)
+    memberships = await active_memberships(session, me.email)
+    organizations = {
+        org.id: org
+        for org in await session.scalars(
+            select(Organization).where(Organization.id.in_([m.organization_id for m in memberships]))
+        )
+    }
+    return [
+        WorkspaceOut(
+            organization=OrganizationOut.from_model(organizations[m.organization_id]),
+            role=m.role,
+            current=m.organization_id == principal.organization_id,
+        )
+        for m in memberships
+    ]
+
+
+@router.post(
+    "/workspaces/switch",
+    response_model=SessionOut,
+    responses={403: {"model": ErrorResponse}, 404: {"model": ErrorResponse}},
+)
+async def switch_workspace(
+    payload: SwitchWorkspaceRequest,
+    request: Request,
+    response: Response,
+    principal: Annotated[Principal, Depends(get_principal)],
+    session: SessionDep,
+    settings: SettingsDep,
+) -> SessionOut:
+    """Continue in another workspace this account belongs to. Sets a new session cookie."""
+    me = await _signed_in_user(principal, session)
+    memberships = await active_memberships(session, me.email)
+    target = next((m for m in memberships if m.organization_id == payload.organization_id), None)
+    if target is None:
+        raise NotFound("You don't have access to that workspace.")
+    target.last_login_at = datetime.now(UTC)
+    await session.commit()
+    _set_session_cookie(response, request, settings, target)
+    organization = await session.get(Organization, target.organization_id)
+    return SessionOut(method="session", user=UserOut.from_model(target), organization=OrganizationOut.from_model(organization))
+
+
+@router.post(
+    "/workspaces",
+    response_model=SessionOut,
+    status_code=status.HTTP_201_CREATED,
+    responses={403: {"model": ErrorResponse}, 409: {"model": ErrorResponse, "description": "Workspace limit reached."}},
+)
+async def new_workspace(
+    payload: CreateWorkspaceRequest,
+    request: Request,
+    response: Response,
+    principal: Annotated[Principal, Depends(get_principal)],
+    session: SessionDep,
+    settings: SettingsDep,
+) -> SessionOut:
+    """Create another workspace owned by the signed-in account, and switch to it."""
+    me = await _signed_in_user(principal, session)
+    owner = await create_workspace(session, settings, email=me.email, display_name=me.full_name, name=payload.name)
+    owner.last_login_at = datetime.now(UTC)
+    await session.commit()
+    _set_session_cookie(response, request, settings, owner)
+    organization = await session.get(Organization, owner.organization_id)
+    return SessionOut(method="session", user=UserOut.from_model(owner), organization=OrganizationOut.from_model(organization))
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT, response_class=Response)

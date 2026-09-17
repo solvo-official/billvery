@@ -166,6 +166,22 @@ export interface InviteUserRequest {
   role: Role;
 }
 
+/** A workspace the signed-in Google account belongs to (GET /api/v1/auth/workspaces). */
+export interface Workspace {
+  organization: Organization;
+  /** null when the console authenticated with the development API key */
+  role: Role | null;
+  current: boolean;
+}
+
+/** PATCH /api/v1/organization (owners and admins) */
+export interface UpdateOrganizationRequest {
+  name?: string;
+  legal_name?: string | null;
+  country_code?: string | null;
+  currency_code?: string;
+}
+
 /** PATCH /api/v1/users/{id} */
 export interface UpdateUserRequest {
   role?: Role;

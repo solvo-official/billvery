@@ -73,7 +73,8 @@ type Action =
   | { type: "sync/result"; error: ApiError | null }
   | { type: "live/set"; live: boolean }
   | { type: "reviewer/set"; reviewerId: string }
-  | { type: "users/set"; users: User[] };
+  | { type: "users/set"; users: User[] }
+  | { type: "organization/set"; organization: Organization };
 
 const byNewest = (a: InvoiceRecord, b: InvoiceRecord) => b.created_at.localeCompare(a.created_at);
 const stamp = (at: string) => Date.parse(at) || 0;
@@ -154,6 +155,12 @@ function reducer(state: AuditState, action: Action): AuditState {
       return { ...state, reviewerId: action.reviewerId };
     case "users/set":
       return { ...state, users: action.users };
+    case "organization/set":
+      return {
+        ...state,
+        organization: action.organization,
+        session: state.session ? { ...state.session, organization: action.organization } : state.session,
+      };
   }
 }
 
@@ -194,6 +201,8 @@ interface AuditStore {
   signOut: () => void;
   /** Re-read the active members after a team change, so names and reviewers stay current. */
   reloadUsers: () => Promise<void>;
+  /** Apply saved workspace settings (name, currency) everywhere they are shown. */
+  setOrganization: (organization: Organization) => void;
   invoices: InvoiceRecord[];
   touched: Record<string, number>;
   pending: Record<string, true>;
@@ -366,6 +375,7 @@ export function AuditStoreProvider({ children }: { children: ReactNode }) {
           ? "Your role can view invoices but not approve them."
           : "Choose who you're acting as in the top-right menu.",
       maxUploadBytes: state.health?.limits.max_upload_bytes ?? MAX_UPLOAD_BYTES,
+      setOrganization: (organization) => dispatch({ type: "organization/set", organization }),
       reloadUsers: async () => {
         try {
           dispatch({ type: "users/set", users: await api.users() });

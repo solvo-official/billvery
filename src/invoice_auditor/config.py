@@ -54,6 +54,14 @@ class Settings(BaseSettings):
     google_client_id: str | None = None
     google_client_secret: SecretStr | None = None
 
+    # --- Workspaces --------------------------------------------------------------------------
+    # A Google account that signs in without belonging to any workspace gets its own. Leave
+    # SIGNUP_ALLOWLIST empty to let any Google account do that, or list who may, comma separated:
+    # full addresses (name@gmail.com) and whole domains (@company.com).
+    signup_allowlist: str | None = None
+    workspace_default_currency: str = Field("USD", pattern=r"^[A-Za-z]{3}$")
+    max_workspaces_per_account: int = Field(5, ge=1, le=100)
+
     # --- Gemini extraction ----------------------------------------------------------------
     gemini_api_key: SecretStr | None = None
     # Gemini 1.5 Pro was shut down by Google in September 2025, so it cannot be the default.
@@ -154,6 +162,15 @@ class Settings(BaseSettings):
         if self.vercel_project_production_url:
             return f"https://{self.vercel_project_production_url.rstrip('/')}"
         return None
+
+    def signup_allowed(self, email: str) -> bool:
+        """May this Google account create a workspace of its own?"""
+        if not self.signup_allowlist:
+            return True
+        email = email.strip().lower()
+        domain = "@" + email.rpartition("@")[2]
+        entries = {entry.strip().lower() for entry in self.signup_allowlist.split(",") if entry.strip()}
+        return email in entries or domain in entries
 
     @property
     def google_login_configured(self) -> bool:

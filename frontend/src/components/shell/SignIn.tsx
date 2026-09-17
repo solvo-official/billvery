@@ -5,7 +5,8 @@ import { api } from "@/lib/api";
 
 /** Why a sign-in attempt came back without a session. Keyed by `?auth_error=` from the callback. */
 const REASONS: Record<string, string> = {
-  not_invited: "That Google account isn't registered for this organization. Ask an administrator to add your email address, then try again.",
+  signup_closed: "New workspaces are limited to approved Google accounts on this deployment. Ask someone to invite you to their workspace.",
+  workspace_limit: "That Google account already owns the maximum number of workspaces.",
   cancelled: "Sign-in was cancelled.",
   email_unverified: "That Google account's email address isn't verified.",
   state_expired: "The sign-in attempt took too long. Try again.",
@@ -49,7 +50,7 @@ export function SignIn({ googleLogin }: { googleLogin: boolean }) {
         </span>
         <h1 className="mt-4 text-[18px] font-semibold tracking-[-0.02em] text-ink">Invoice Auditor</h1>
         <p className="mt-1.5 text-[13px] leading-relaxed text-ink-2">
-          Sign in to review invoices, approve bills and read audit reports for your organization.
+          Sign in with Google to open your workspace. Your invoices stay private to your workspace unless you invite people to it.
         </p>
 
         {message ? (
@@ -67,8 +68,8 @@ export function SignIn({ googleLogin }: { googleLogin: boolean }) {
               </a>
             </Button>
             <p className="mt-4 text-[11.5px] leading-relaxed text-ink-3">
-              Access is invite-only: your Google address must already belong to a user of this organization. Every
-              approval is recorded in your name.
+              New here? Signing in creates your own private workspace. If someone invited you, you'll find their workspace in
+              the menu at the top left.
             </p>
           </>
         ) : (

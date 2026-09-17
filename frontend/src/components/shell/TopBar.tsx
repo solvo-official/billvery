@@ -1,4 +1,5 @@
-import { Archive, Check, ChevronDown, Copy, Inbox, LogOut, Monitor, Moon, Sun, UserCheck, Users, type LucideIcon } from "lucide-react";
+import { Archive, Check, ChevronDown, Copy, Inbox, LoaderCircle, LogOut, Monitor, Moon, Plus, Settings, Sun, UserCheck, Users, type LucideIcon } from "lucide-react";
+import { toast } from "sonner";
 import { useEffect, useState } from "react";
 import { Avatar } from "@/components/audit/status";
 import {
@@ -18,7 +19,7 @@ import { useRoute, type View } from "@/hooks/use-route";
 import { useTheme, type ThemePreference } from "@/hooks/use-theme";
 import { api, toApiError, type ApiError } from "@/lib/api";
 import { cn } from "@/lib/cn";
-import type { Health } from "@/lib/types";
+import type { Health, Workspace } from "@/lib/types";
 import { useAudit } from "@/state/audit-store";
 
 export function TopBar() {
@@ -128,16 +129,53 @@ function PrimaryNav() {
   );
 }
 
+/** The current workspace, and every other workspace this Google account can switch to. */
 function OrganizationMenu() {
-  const { organization, users } = useAudit();
+  const { organization, users, session } = useAudit();
+  const [workspaces, setWorkspaces] = useState<Workspace[] | null>(null);
+  const [failed, setFailed] = useState(false);
+  const [busy, setBusy] = useState<string | null>(null);
   if (!organization) return null;
+  const signedIn = Boolean(session?.user);
+
+  const load = (open: boolean) => {
+    if (!open || !signedIn) return;
+    setFailed(false);
+    api.workspaces().then(setWorkspaces, () => setFailed(true));
+  };
+
+  const switchTo = async (workspace: Workspace) => {
+    if (workspace.current || busy) return;
+    setBusy(workspace.organization.id);
+    try {
+      await api.switchWorkspace(workspace.organization.id);
+      window.location.reload();
+    } catch (error) {
+      setBusy(null);
+      toast.error(`Couldn't open ${workspace.organization.name}`, { description: toApiError(error).message });
+    }
+  };
+
+  const create = async () => {
+    if (busy) return;
+    setBusy("new");
+    try {
+      await api.createWorkspace();
+      window.location.hash = "#/team";
+      window.location.reload();
+    } catch (error) {
+      setBusy(null);
+      toast.error("Couldn't create a workspace", { description: toApiError(error).message });
+    }
+  };
+
   return (
-    <DropdownMenu>
+    <DropdownMenu onOpenChange={load}>
       <DropdownMenuTrigger asChild>
         <button
           type="button"
           className="flex h-8 min-w-0 items-center gap-2 rounded-md px-2 text-left transition-colors hover:bg-hover data-[state=open]:bg-hover"
-          aria-label={`Organization: ${organization.name}`}
+          aria-label={`Workspace: ${organization.name}`}
         >
           {organization.country_code ? <CountryChip code={organization.country_code} /> : null}
           <span className="truncate text-[13px] font-medium">{organization.name}</span>
@@ -148,16 +186,68 @@ function OrganizationMenu() {
         <div className="px-2 py-2">
           <p className="font-medium">{organization.legal_name ?? organization.name}</p>
           <p className="mt-0.5 text-[12px] text-ink-3">
-            {organization.currency_code} · {organization.subscription_plan} plan · {users.length} member{users.length === 1 ? "" : "s"}
+            {organization.currency_code} · {users.length} member{users.length === 1 ? "" : "s"} · invoices are private to this workspace
           </p>
         </div>
-        <DropdownMenuSeparator />
-        <p className="px-2 py-1.5 text-[11px] leading-snug text-ink-3">
-          Manage who can sign in from the Team page.
-        </p>
-        <p className="px-2 pb-1.5 text-[11px] text-ink-3">
-          Tenant <span className="figure text-ink-2">{organization.id}</span>
-        </p>
+        {signedIn ? (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuLabel>Your workspaces</DropdownMenuLabel>
+            {workspaces === null && !failed ? (
+              <div className="flex items-center gap-2 px-2 py-2 text-[12px] text-ink-3">
+                <LoaderCircle className="size-3.5 animate-spin" aria-hidden /> Loading…
+              </div>
+            ) : failed ? (
+              <p className="px-2 py-2 text-[12px] text-rejected">Couldn't load your workspaces. Close and reopen this menu to retry.</p>
+            ) : (
+              workspaces!.map((workspace) => (
+                <DropdownMenuItem
+                  key={workspace.organization.id}
+                  onSelect={(event) => {
+                    event.preventDefault();
+                    void switchTo(workspace);
+                  }}
+                  className="py-2"
+                >
+                  <span className="flex size-6 shrink-0 items-center justify-center rounded-md bg-accent/10 font-label text-[11px] font-semibold text-accent">
+                    {workspace.organization.name.slice(0, 1).toUpperCase()}
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate">{workspace.organization.name}</span>
+                    <span className="block truncate text-[11px] capitalize text-ink-3">{workspace.role ?? "API key"}</span>
+                  </span>
+                  {busy === workspace.organization.id ? (
+                    <LoaderCircle className="animate-spin text-ink-3" aria-label="Switching" />
+                  ) : workspace.current ? (
+                    <Check className="text-accent" aria-label="Current workspace" />
+                  ) : null}
+                </DropdownMenuItem>
+              ))
+            )}
+            <DropdownMenuSeparator />
+            <DropdownMenuItem
+              onSelect={(event) => {
+                event.preventDefault();
+                void create();
+              }}
+            >
+              {busy === "new" ? <LoaderCircle className="animate-spin text-ink-3" aria-hidden /> : <Plus className="text-ink-3" aria-hidden />}
+              Create a new workspace
+            </DropdownMenuItem>
+            <DropdownMenuItem asChild>
+              <a href="#/team">
+                <Settings className="text-ink-3" aria-hidden /> Team and workspace settings
+              </a>
+            </DropdownMenuItem>
+          </>
+        ) : (
+          <>
+            <DropdownMenuSeparator />
+            <p className="px-2 py-1.5 text-[11px] leading-snug text-ink-3">
+              Using the development API key. Sign in with Google to switch or create workspaces.
+            </p>
+          </>
+        )}
       </DropdownMenuContent>
     </DropdownMenu>
   );

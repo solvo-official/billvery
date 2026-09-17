@@ -17,7 +17,9 @@ import {
   type ApproveInvoiceRequest,
   type InviteUserRequest,
   type Session,
+  type UpdateOrganizationRequest,
   type UpdateUserRequest,
+  type Workspace,
   type Health,
   type InvoicePage,
   type InvoiceRecord,
@@ -166,6 +168,11 @@ function users(value: unknown): User[] {
   return value as User[];
 }
 
+function workspaceList(value: unknown): Workspace[] {
+  if (!Array.isArray(value) || !value.every((item) => isObject(item) && isObject(item.organization))) malformed("workspace list");
+  return value as Workspace[];
+}
+
 function member(value: unknown): User {
   if (!isObject(value) || typeof value.id !== "string" || typeof value.email !== "string") malformed("team member");
   return value as unknown as User;
@@ -234,6 +241,20 @@ export const api = {
   },
 
   organization: () => request("/api/v1/organization", undefined, organization),
+
+  /** Rename the workspace or change its country and currency (owners and admins). */
+  updateOrganization: (body: UpdateOrganizationRequest) =>
+    request("/api/v1/organization", { ...json(body), method: "PATCH" }, organization),
+
+  /** The workspaces this Google account belongs to, most recently used first. */
+  workspaces: (signal?: AbortSignal) => request("/api/v1/auth/workspaces", { signal, cache: "no-store" }, workspaceList),
+
+  /** Continue in another workspace; the server sets a new session cookie. */
+  switchWorkspace: (organizationId: string) =>
+    request("/api/v1/auth/workspaces/switch", json({ organization_id: organizationId }), session),
+
+  /** Create another workspace owned by the signed-in account, and switch to it. */
+  createWorkspace: (name?: string) => request("/api/v1/auth/workspaces", json(name ? { name } : {}), session),
 
   users: () => request("/api/v1/users", undefined, users),
 

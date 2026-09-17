@@ -1,4 +1,4 @@
-import { Check, ChevronDown, Copy, Crown, LoaderCircle, MoreHorizontal, RotateCcw, ShieldCheck, UserMinus, UserPlus, Users } from "lucide-react";
+import { Building2, Check, ChevronDown, Copy, Crown, LoaderCircle, MoreHorizontal, RotateCcw, ShieldCheck, UserMinus, UserPlus, Users } from "lucide-react";
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { toast } from "sonner";
 import { Avatar } from "@/components/audit/status";
@@ -22,7 +22,7 @@ import { useNow } from "@/hooks/use-now";
 import { api, toApiError, type ApiError } from "@/lib/api";
 import { cn } from "@/lib/cn";
 import { relativeTime } from "@/lib/dates";
-import type { Role, User } from "@/lib/types";
+import type { Organization, Role, User } from "@/lib/types";
 import { useAudit, useOrganization } from "@/state/audit-store";
 
 const ROLES: { value: Role; label: string; summary: string }[] = [
@@ -86,7 +86,7 @@ export function TeamView() {
         title="Team"
         description={
           <>
-            Everyone who can sign in to <span className="text-ink-2">{organization.name}</span> with Google
+            People who share the <span className="text-ink-2">{organization.name}</span> workspace and its invoices
             {members ? ` · ${active.length} with access${invitedCount ? `, ${invitedCount} not signed in yet` : ""}` : ""}
           </>
         }
@@ -170,6 +170,7 @@ export function TeamView() {
               </p>
             </section>
           )}
+          {rules.canManage ? <WorkspaceSettings organization={organization} /> : null}
           <RolesGuide />
         </aside>
       </div>
@@ -214,7 +215,9 @@ function InviteCard({ assignable, organization, onInvited }: { assignable: Role[
       <h2 id="invite-heading" className="flex items-center gap-2 text-[15px] font-semibold tracking-[-0.01em]">
         <UserPlus className="size-4 text-ink-3" aria-hidden /> Invite people
       </h2>
-      <p className="mt-1 text-[12.5px] leading-relaxed text-ink-3">They sign in with this Google account. No email is sent, so share the message below.</p>
+      <p className="mt-1 text-[12.5px] leading-relaxed text-ink-3">
+        They'll see this workspace's invoices when they sign in with this Google account. No email is sent, so share the message below.
+      </p>
 
       <form onSubmit={(event) => void submit(event)} className="mt-3.5 flex flex-col gap-3">
         <label className="flex flex-col gap-1.5">
@@ -390,6 +393,73 @@ function MemberRow({
   );
 }
 
+/** Name, country and reporting currency of the current workspace. */
+function WorkspaceSettings({ organization }: { organization: Organization }) {
+  const { setOrganization } = useAudit();
+  const [name, setName] = useState(organization.name);
+  const [currency, setCurrency] = useState(organization.currency_code);
+  const [country, setCountry] = useState(organization.country_code ?? "");
+  const [saving, setSaving] = useState(false);
+
+  const dirty =
+    name.trim() !== organization.name || currency.trim().toUpperCase() !== organization.currency_code || country.trim().toUpperCase() !== (organization.country_code ?? "");
+  const valid = name.trim().length > 0 && /^[A-Za-z]{3}$/.test(currency.trim()) && (country.trim() === "" || /^[A-Za-z]{2}$/.test(country.trim()));
+
+  const save = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!dirty || !valid || saving) return;
+    setSaving(true);
+    try {
+      const updated = await api.updateOrganization({
+        name: name.trim(),
+        currency_code: currency.trim().toUpperCase(),
+        country_code: country.trim() ? country.trim().toUpperCase() : null,
+      });
+      setOrganization(updated);
+      setName(updated.name);
+      setCurrency(updated.currency_code);
+      setCountry(updated.country_code ?? "");
+      toast.success("Workspace settings saved");
+    } catch (failure) {
+      toast.error("Couldn't save the workspace settings", { description: toApiError(failure).message });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const field =
+    "h-9 w-full rounded-lg border border-line bg-surface-solid px-3 text-[13px] text-ink shadow-[var(--shadow-card)] placeholder:text-ink-3 transition-[border-color,box-shadow] focus:border-accent/60 focus:shadow-[0_0_0_3px_color-mix(in_oklab,var(--accent)_18%,transparent)] focus:outline-none";
+
+  return (
+    <section aria-labelledby="workspace-heading" className="glass rounded-xl px-4 py-4">
+      <h2 id="workspace-heading" className="flex items-center gap-2 text-[15px] font-semibold tracking-[-0.01em]">
+        <Building2 className="size-4 text-ink-3" aria-hidden /> Workspace settings
+      </h2>
+      <form onSubmit={(event) => void save(event)} className="mt-3 flex flex-col gap-3">
+        <label className="flex flex-col gap-1.5">
+          <span className="eyebrow">Name</span>
+          <input value={name} maxLength={255} onChange={(event) => setName(event.target.value)} className={field} />
+        </label>
+        <div className="grid grid-cols-2 gap-3">
+          <label className="flex flex-col gap-1.5">
+            <span className="eyebrow">Currency</span>
+            <input value={currency} maxLength={3} placeholder="PKR" onChange={(event) => setCurrency(event.target.value.toUpperCase())} className={cn(field, "figure uppercase")} />
+          </label>
+          <label className="flex flex-col gap-1.5">
+            <span className="eyebrow">Country</span>
+            <input value={country} maxLength={2} placeholder="PK" onChange={(event) => setCountry(event.target.value.toUpperCase())} className={cn(field, "figure uppercase")} />
+          </label>
+        </div>
+        <p className="text-[11.5px] leading-relaxed text-ink-3">Currency is a 3-letter code (PKR, USD). Country is a 2-letter code (PK) and decides the tax-rate check.</p>
+        <Button type="submit" variant="secondary" disabled={!dirty || !valid || saving}>
+          {saving ? <LoaderCircle className="animate-spin" aria-hidden /> : <Check aria-hidden />}
+          {saving ? "Saving…" : "Save changes"}
+        </Button>
+      </form>
+    </section>
+  );
+}
+
 function RolesGuide() {
   return (
     <section aria-labelledby="roles-heading" className="glass rounded-xl px-4 py-4">
@@ -405,7 +475,8 @@ function RolesGuide() {
         ))}
       </dl>
       <p className="mt-3.5 border-t border-line pt-3 text-[11.5px] leading-relaxed text-ink-3">
-        Removing access signs the person out on their next request. Their past approvals stay in the audit trail.
+        Removing access signs the person out of this workspace on their next request. Their past approvals stay in the audit trail,
+        and their own workspaces are not affected.
       </p>
     </section>
   );
