@@ -45,7 +45,7 @@ function permissions(me: User | null) {
 }
 
 function inviteMessage(email: string, organization: string): string {
-  return `You've been given access to ${organization} on Invoice Auditor. Sign in at ${window.location.origin} with your Google account ${email}.`;
+  return `You've been given access to ${organization} on Billvery. Sign in at ${window.location.origin} with your Google account ${email}.`;
 }
 
 /** Owners and admins invite Google accounts here; everyone can see who is on the team. */

@@ -101,7 +101,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             await app.state.db.dispose()
 
     app = FastAPI(
-        title="Invoice & Expense Auditor API",
+        title="Billvery API",
         version=__version__,
         lifespan=lifespan,
         responses={401: {"model": ErrorResponse}, 403: {"model": ErrorResponse}},

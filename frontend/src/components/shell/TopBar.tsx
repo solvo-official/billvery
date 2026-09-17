@@ -46,14 +46,14 @@ export function TopBar() {
 /** The auditor's tick-and-tie mark: a tick with a crossbar. */
 function Brand() {
   return (
-    <a href="#/review" className="flex items-center gap-2 rounded-md" aria-label="Invoice Auditor, review queue">
+    <a href="#/review" className="flex items-center gap-2 rounded-md" aria-label="Billvery, review queue">
       <span className="flex size-7 items-center justify-center rounded-lg bg-accent text-on-accent shadow-[var(--shadow-card),inset_0_1px_0_rgb(255_255_255/0.2)]">
         <svg viewBox="0 0 24 24" className="size-4" fill="none" stroke="currentColor" strokeWidth="2.25" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
           <path d="M4.5 12.5 9 17 19.5 6.5" />
           <path d="M12.5 8.5 16.5 12.5" />
         </svg>
       </span>
-      <span className="hidden text-[14px] font-semibold tracking-[-0.01em] text-ink sm:inline">Invoice Auditor</span>
+      <span className="hidden text-[14px] font-semibold tracking-[-0.01em] text-ink sm:inline">Billvery</span>
     </a>
   );
 }
