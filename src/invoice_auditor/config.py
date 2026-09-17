@@ -1,14 +1,57 @@
+import os
+import re
 from decimal import Decimal
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal
 
+from dotenv import dotenv_values
 from pydantic import Field, SecretStr, field_validator, model_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic.fields import FieldInfo
+from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
+from pydantic_settings.sources import DotEnvSettingsSource
 
 # Vercel Functions reject a request body over 4.5 MB before it reaches the app, so uploads there
 # are capped below that, leaving room for multipart framing.
 VERCEL_UPLOAD_LIMIT_BYTES = 4 * 1024 * 1024
+
+_NUMBERED_GEMINI_KEY = re.compile(r"GEMINI_API_KEY_(\d{1,3})", re.IGNORECASE)
+_KEY_LIST_SEPARATORS = re.compile(r"[\s,;]+")
+
+
+class _NumberedGeminiKeys(PydanticBaseSettingsSource):
+    """GEMINI_API_KEY_1, GEMINI_API_KEY_2, ... in number order, from the environment and the .env file.
+
+    Settings only reads variables it declares a field for, so numbered names need their own source.
+    """
+
+    def __init__(self, settings_cls: type[BaseSettings], dotenv: PydanticBaseSettingsSource) -> None:
+        super().__init__(settings_cls)
+        self._dotenv = dotenv
+
+    def get_field_value(self, field: FieldInfo, field_name: str) -> tuple[Any, str, bool]:
+        return None, field_name, False
+
+    def __call__(self) -> dict[str, Any]:
+        found: dict[int, str] = {}
+        if isinstance(self._dotenv, DotEnvSettingsSource):
+            env_files = self._dotenv.env_file
+            paths = [] if env_files is None else [env_files] if isinstance(env_files, (str, os.PathLike)) else list(env_files)
+            for path in paths:
+                if Path(path).expanduser().is_file():
+                    found.update(_numbered(dotenv_values(Path(path).expanduser(), encoding=self._dotenv.env_file_encoding)))
+        found.update(_numbered(os.environ))  # the environment wins over the file, as for every other setting
+        keys = [found[number] for number in sorted(found)]
+        return {"gemini_numbered_api_keys": keys} if keys else {}
+
+
+def _numbered(variables: Any) -> dict[int, str]:
+    numbered: dict[int, str] = {}
+    for name, value in variables.items():
+        match = _NUMBERED_GEMINI_KEY.fullmatch(name)
+        if match and value and value.strip():
+            numbered[int(match.group(1))] = value.strip()
+    return numbered
 
 
 class Settings(BaseSettings):
@@ -63,11 +106,22 @@ class Settings(BaseSettings):
     max_workspaces_per_account: int = Field(5, ge=1, le=100)
 
     # --- Gemini extraction ----------------------------------------------------------------
+    # One key, or a pool that requests rotate through: GEMINI_API_KEYS (separated by commas, spaces
+    # or new lines) and/or GEMINI_API_KEY_1, GEMINI_API_KEY_2, ... Every distinct key is used.
+    # Google applies rate limits per Cloud project, so keys from the same project share one quota.
     gemini_api_key: SecretStr | None = None
+    gemini_api_keys: SecretStr | None = None
+    gemini_numbered_api_keys: list[SecretStr] = Field(default_factory=list, exclude=True)
     # Gemini 1.5 Pro was shut down by Google in September 2025, so it cannot be the default.
     gemini_model: str = "gemini-3.1-pro-preview"
     gemini_timeout_s: float = Field(120.0, gt=0)
-    gemini_max_attempts: int = Field(3, ge=1)
+    gemini_max_attempts: int = Field(3, ge=1, description="Per key, for timeouts and 5xx; a 429 moves to the next key instead")
+    gemini_rate_limit_cooldown_s: float = Field(
+        60.0, gt=0, description="How long a key rests after a rate limit when Google doesn't say how long"
+    )
+    gemini_max_throttle_wait_s: float = Field(
+        30.0, ge=0, description="How long an upload waits for a resting key before reporting the batch as throttled"
+    )
 
     # --- Uploaded documents ---------------------------------------------------------------
     # local: content-addressed files (<dir>/<organization>/<sha[:2]>/<sha256>), a relative path
@@ -109,6 +163,17 @@ class Settings(BaseSettings):
                     continue
             cleaned[key] = value
         return cleaned
+
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls: type[BaseSettings],
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
+    ) -> tuple[PydanticBaseSettingsSource, ...]:
+        return init_settings, env_settings, dotenv_settings, _NumberedGeminiKeys(settings_cls, dotenv_settings), file_secret_settings
 
     @field_validator("jwt_secret")
     @classmethod
@@ -171,6 +236,17 @@ class Settings(BaseSettings):
         domain = "@" + email.rpartition("@")[2]
         entries = {entry.strip().lower() for entry in self.signup_allowlist.split(",") if entry.strip()}
         return email in entries or domain in entries
+
+    @property
+    def gemini_key_pool(self) -> list[str]:
+        """Every distinct Gemini API key, in order: GEMINI_API_KEYS, GEMINI_API_KEY, then the numbered ones."""
+        keys: list[str] = []
+        if self.gemini_api_keys is not None:
+            keys += _KEY_LIST_SEPARATORS.split(self.gemini_api_keys.get_secret_value())
+        if self.gemini_api_key is not None:
+            keys.append(self.gemini_api_key.get_secret_value())
+        keys += [key.get_secret_value() for key in self.gemini_numbered_api_keys]
+        return list(dict.fromkeys(key.strip() for key in keys if key.strip()))
 
     @property
     def google_login_configured(self) -> bool:

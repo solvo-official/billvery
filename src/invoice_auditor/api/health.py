@@ -22,7 +22,11 @@ async def healthz(request: Request, session: SessionDep, settings: SettingsDep) 
         status="ok",
         version=__version__,
         database="ok",
-        extraction=ExtractionHealth(configured=extractor is not None, model=settings.gemini_model),
+        extraction=ExtractionHealth(
+            configured=extractor is not None,
+            model=settings.gemini_model,
+            api_keys=getattr(extractor, "key_count", 1) if extractor is not None else 0,
+        ),
         auth=AuthHealth(google=settings.google_login_configured, session=settings.jwt_secret is not None),
         limits=LimitsHealth(max_upload_bytes=settings.max_upload_bytes),
     )

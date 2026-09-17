@@ -6,7 +6,9 @@ from datetime import datetime, timedelta
 
 import pytest
 
-from invoice_auditor.ingestion.gemini import ExtractionError
+import asyncio
+
+from invoice_auditor.ingestion.gemini import ExtractionError, ExtractionProgress, ExtractionThrottled
 from invoice_auditor.schemas.extraction import InvoiceExtraction
 
 from .factories import BASE_EXTRACTION, invoice_payload, make_tenant, process
@@ -25,7 +27,7 @@ class FakeExtractor:
         self.result = result
         self.calls = 0
 
-    async def extract(self, document: bytes, mime_type: str) -> InvoiceExtraction:
+    async def extract(self, document: bytes, mime_type: str, progress=None) -> InvoiceExtraction:
         self.calls += 1
         if isinstance(self.result, Exception):
             raise self.result
@@ -199,6 +201,40 @@ async def test_extraction_failure_is_reported_in_the_stream(app, client, tenant)
     assert page["items"] == []  # nothing half-saved
 
 
+async def test_throttled_extraction_tells_the_console_when_to_retry(app, client, tenant):
+    app.state.extractor = FakeExtractor(ExtractionThrottled(retry_after_s=41.2, keys=5, daily=False))
+    stream = await upload(client, tenant)
+    assert stream[-1] == {
+        "event": "error",
+        "error": {
+            "code": "extraction_throttled",
+            "message": "All 5 Gemini API keys are at their rate limits right now, so this batch is throttled. Try again in 42 seconds.",
+            "details": {"retry_after_ms": 41200, "api_keys": 5, "daily_quota": False},
+        },
+    }
+    assert (await client.get("/api/v1/invoices", headers=tenant.headers)).json()["items"] == []
+
+
+async def test_key_switches_and_waits_are_streamed_as_they_happen(app, client, tenant):
+    class SwitchingExtractor(FakeExtractor):
+        async def extract(self, document, mime_type, progress: ExtractionProgress | None = None):
+            assert progress is not None
+            progress._switched()  # key 1 was rate limited
+            await asyncio.sleep(0.05)
+            progress._waiting(__import__("time").monotonic() + 12)  # every key resting
+            await asyncio.sleep(0.05)
+            progress._waiting(None)
+            await asyncio.sleep(0.05)
+            return await super().extract(document, mime_type)
+
+    app.state.extractor = SwitchingExtractor(extraction())
+    stream = await upload(client, tenant)
+    extracting = [e for e in stream if e["event"] == "extracting"]
+    assert extracting[0] == {"event": "extracting", "model": "fake-gemini", "elapsed_ms": 0, "reused": False, "key_switches": 0, "waiting_ms": 0}
+    assert [(e["key_switches"], e["waiting_ms"] > 11_000) for e in extracting[1:]] == [(1, False), (1, True), (1, False)]
+    assert stream[-1]["event"] == "complete"
+
+
 @pytest.mark.parametrize(
     ("content", "filename", "status", "code"),
     [
@@ -273,12 +309,12 @@ async def test_health_reports_extraction(app, client):
         "status": "ok",
         "version": "1.0.0",
         "database": "ok",
-        "extraction": {"configured": False, "model": "gemini-3.1-pro-preview"},
+        "extraction": {"configured": False, "model": "gemini-3.1-pro-preview", "api_keys": 0},
         "auth": {"google": False, "session": True},
         "limits": {"max_upload_bytes": 18 * 1024 * 1024},
     }
     app.state.extractor = FakeExtractor(extraction())
-    assert (await client.get("/healthz")).json()["extraction"]["configured"] is True
+    assert (await client.get("/healthz")).json()["extraction"] | {"model": None} == {"configured": True, "model": None, "api_keys": 1}
 
 
 async def test_audit_response_includes_line_items_and_document(client, tenant):

@@ -103,7 +103,8 @@ class FakeModels:
 def extractor_with(text: str | None) -> tuple[GeminiInvoiceExtractor, FakeModels]:
     extractor = GeminiInvoiceExtractor(api_key="test-key", model="gemini-test")
     fake = FakeModels(text)
-    extractor._client = SimpleNamespace(aio=SimpleNamespace(models=fake))
+    [key] = extractor.pool.keys
+    key.client = SimpleNamespace(aio=SimpleNamespace(models=fake))
     return extractor, fake
 
 

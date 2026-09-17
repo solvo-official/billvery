@@ -112,9 +112,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.db = Database(settings)
     app.state.documents = _document_store(settings)
     # Uploads need Gemini; without a key the rest of the API still works.
-    app.state.extractor = GeminiInvoiceExtractor.from_settings(settings) if settings.gemini_api_key else None
+    app.state.extractor = GeminiInvoiceExtractor.from_settings(settings) if settings.gemini_key_pool else None
     if app.state.extractor is None:
-        logger.warning("GEMINI_API_KEY is not set: POST /api/v1/invoices/upload will answer 503")
+        logger.warning("No Gemini API key is set: POST /api/v1/invoices/upload will answer 503")
+    elif app.state.extractor.key_count > 1:
+        logger.info("Gemini extraction rotates through %d API keys", app.state.extractor.key_count)
     if settings.jwt_secret is None:
         logger.warning("JWT_SECRET is not set: browser sign-in is disabled, only API keys can authenticate")
     app.middleware("http")(_request_context)

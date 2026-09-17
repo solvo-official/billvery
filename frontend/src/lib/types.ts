@@ -192,7 +192,8 @@ export interface Health {
   status: "ok";
   version: string;
   database: "ok";
-  extraction: { configured: boolean; model: string };
+  /** api_keys: how many Gemini API keys uploads rotate through (never the keys themselves). */
+  extraction: { configured: boolean; model: string; api_keys?: number };
   /** Which sign-in methods this deployment offers. */
   auth: { google: boolean; session: boolean };
   limits: { max_upload_bytes: number };
@@ -228,7 +229,16 @@ export interface ApproveInvoiceRequest {
 /** One line of the NDJSON stream from POST /api/v1/invoices/upload */
 export type UploadEvent =
   | { event: "received"; filename: string; content_type: string; size_bytes: number; sha256: string }
-  | { event: "extracting"; model: string; elapsed_ms: number; reused?: boolean }
+  | {
+      event: "extracting";
+      model: string;
+      elapsed_ms: number;
+      reused?: boolean;
+      /** Times this upload moved to another Gemini API key after a rate limit. */
+      key_switches?: number;
+      /** How long until a rate-limited key is usable again, while every key is resting; 0 otherwise. */
+      waiting_ms?: number;
+    }
   | { event: "auditing" }
   | { event: "complete"; replayed: boolean; audit: InvoiceRecord }
   | { event: "error"; error: { code: string; message: string; details?: unknown } };

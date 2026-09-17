@@ -93,7 +93,8 @@ repo root
 | `JWT_SECRET` | yes | ≥ 32 random characters: `python -c "import secrets;print(secrets.token_urlsafe(48))"` |
 | `GOOGLE_CLIENT_ID` | yes | OAuth client ID |
 | `GOOGLE_CLIENT_SECRET` | yes | OAuth client secret |
-| `GEMINI_API_KEY` | for uploads | Google AI Studio key; without it uploads answer 503 |
+| `GEMINI_API_KEY` | for uploads | Google AI Studio key; without any key uploads answer 503 |
+| `GEMINI_API_KEYS` or `GEMINI_API_KEY_1`, `_2`, … | no | more keys for uploads to rotate through (see below) |
 | `PUBLIC_URL` | custom domain | `https://audit.example.com`; defaults to the Vercel production domain |
 | `GEMINI_MODEL` | no | defaults to `gemini-3.1-pro-preview` |
 
@@ -148,7 +149,7 @@ result; the same key with a different file returns `409`.
 
 Multipart form: `file` (PDF, PNG or JPEG, up to 18 MB; the type is checked by its bytes),
 optional `uploaded_by` and `metadata` (a JSON object), optional `Idempotency-Key` header.
-Gemini extracts the document on the server (needs `GEMINI_API_KEY`, otherwise `503`), the
+Gemini extracts the document on the server (needs a Gemini key, otherwise `503`), the
 original is stored under `DOCUMENT_STORAGE_DIR`, and then the same processing as `/process`
 runs. Problems found before extraction (type, size, unknown user) are ordinary JSON errors.
 After that the response is an NDJSON stream, one event per line:
@@ -156,7 +157,7 @@ After that the response is an NDJSON stream, one event per line:
 ```
 {"event":"received","filename":"inv.pdf","content_type":"application/pdf","size_bytes":84213,"sha256":"…"}
 {"event":"extracting","model":"gemini-3.1-pro-preview","elapsed_ms":0,"reused":false}
-{"event":"extracting","model":"gemini-3.1-pro-preview","elapsed_ms":5000}      ← heartbeat
+{"event":"extracting","model":"gemini-3.1-pro-preview","elapsed_ms":5000,"key_switches":0,"waiting_ms":0}  ← heartbeat
 {"event":"auditing"}
 {"event":"complete","replayed":false,"audit":{ …same shape as GET /audit… }}
 ```
@@ -164,6 +165,19 @@ After that the response is an NDJSON stream, one event per line:
 or `{"event":"error","error":{"code":"extraction_failed","message":"…"}}`. Uploading identical
 bytes again reuses the earlier extraction (no second Gemini call) and is flagged
 `DUPLICATE_FILE_HASH`.
+
+**Several Gemini keys.** With more than one key configured (`GEMINI_API_KEYS=k1,k2,k3` and/or
+`GEMINI_API_KEY_1`, `GEMINI_API_KEY_2`, …), requests take the keys in turn. A key that answers
+`429 RESOURCE_EXHAUSTED` rests for the delay Google's `RetryInfo` gives (or
+`GEMINI_RATE_LIMIT_COOLDOWN_S`), or until midnight Pacific time for a per-day quota, and the same
+upload continues on the next key at once. A key Google refuses outright (invalid or revoked) is
+set aside for 15 minutes. Heartbeats count `key_switches` and, while every key is resting,
+`waiting_ms`. If none comes back within `GEMINI_MAX_THROTTLE_WAIT_S`, the stream ends with
+`{"code":"extraction_throttled","details":{"retry_after_ms":…,"api_keys":5,"daily_quota":false}}`,
+and the console starts that upload again by itself after the delay (up to three times). Rate
+limits apply per Google Cloud project, so only keys from different projects add capacity. The
+pool's state lives in each server process; `/healthz` reports how many keys are configured, never
+the keys.
 
 ### `GET /api/v1/invoices`
 

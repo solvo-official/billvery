@@ -154,8 +154,8 @@ async def _list_tax_limits(settings: Settings, _: argparse.Namespace) -> None:
 async def _extract(settings: Settings, args: argparse.Namespace) -> None:
     from .ingestion.gemini import ExtractionError, GeminiInvoiceExtractor, build_process_request
 
-    if settings.gemini_api_key is None:
-        raise CommandError("GEMINI_API_KEY is not set")
+    if not settings.gemini_key_pool:
+        raise CommandError("no Gemini API key is set (GEMINI_API_KEY, GEMINI_API_KEYS or GEMINI_API_KEY_1, _2, ...)")
     path: Path = args.file
     mime_type = MIME_TYPES.get(path.suffix.lower())
     if mime_type is None:

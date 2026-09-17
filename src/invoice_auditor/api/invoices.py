@@ -27,7 +27,7 @@ from ..errors import (
     ServiceUnavailable,
     UnsupportedMediaType,
 )
-from ..ingestion.gemini import ExtractionError, GeminiInvoiceExtractor, sniff_content_type
+from ..ingestion.gemini import ExtractionError, ExtractionProgress, ExtractionThrottled, GeminiInvoiceExtractor, sniff_content_type
 from ..models import Invoice, User, Vendor
 from ..schemas.api import (
     MAX_METADATA_BYTES,
@@ -214,7 +214,7 @@ async def process_invoice(
 def get_extractor(request: Request) -> GeminiInvoiceExtractor:
     extractor = getattr(request.app.state, "extractor", None)
     if extractor is None:
-        raise ServiceUnavailable("Invoice extraction isn't configured on this server. Set GEMINI_API_KEY and restart it.")
+        raise ServiceUnavailable("Invoice extraction isn't configured on this server. Set GEMINI_API_KEY (or GEMINI_API_KEYS) and restart it.")
     return extractor
 
 
@@ -240,8 +240,10 @@ def _event(name: str, **fields: Any) -> bytes:
         200: {
             "description": (
                 "An NDJSON stream of progress events, one JSON object per line: `received`, "
-                "`extracting` (repeated as a heartbeat with `elapsed_ms`), `auditing`, then "
-                "`complete` with the full `audit`, or `error` with an `error` object."
+                "`extracting` (repeated as a heartbeat with `elapsed_ms`, `key_switches` and "
+                "`waiting_ms`), `auditing`, then `complete` with the full `audit`, or `error` with an "
+                "`error` object. When every Gemini API key is rate limited the error code is "
+                "`extraction_throttled` and `details.retry_after_ms` says when to try again."
             ),
             "content": {"application/x-ndjson": {}},
         },
@@ -333,14 +335,23 @@ async def upload_invoice(
                 yield _event("extracting", model=extractor.model, elapsed_ms=0, reused=True)
             else:
                 started = time.monotonic()
-                yield _event("extracting", model=extractor.model, elapsed_ms=0, reused=False)
-                extraction_task = asyncio.create_task(extractor.extract(content, content_type))
+                progress = ExtractionProgress()
+                yield _event("extracting", model=extractor.model, elapsed_ms=0, reused=False, key_switches=0, waiting_ms=0)
+                extraction_task = asyncio.create_task(extractor.extract(content, content_type, progress=progress))
+                # A heartbeat every few seconds, and straight away when the extractor switches keys or
+                # starts waiting for one, so the console can say why an upload is taking longer.
                 while True:
+                    changed = asyncio.ensure_future(progress.changed.wait())
                     try:
-                        extraction = await asyncio.wait_for(asyncio.shield(extraction_task), HEARTBEAT_SECONDS)
+                        await asyncio.wait({extraction_task, changed}, timeout=HEARTBEAT_SECONDS, return_when=asyncio.FIRST_COMPLETED)
+                    finally:
+                        changed.cancel()
+                    if extraction_task.done():
+                        extraction = extraction_task.result()
                         break
-                    except TimeoutError:
-                        yield _event("extracting", model=extractor.model, elapsed_ms=round((time.monotonic() - started) * 1000))
+                    progress.changed.clear()
+                    now = time.monotonic()
+                    yield _event("extracting", model=extractor.model, elapsed_ms=round((now - started) * 1000), **progress.snapshot(now))
 
             yield _event("auditing")
             payload = ProcessInvoiceRequest(
@@ -354,6 +365,10 @@ async def upload_invoice(
                 audit = await load_audit(session, organization_id, outcome.invoice_id, store)
             logger.info("upload %s (%s) audited as invoice %s: %s", filename, sha256[:12], audit.invoice_id, audit.status)
             yield _event("complete", replayed=outcome.replayed, audit=audit.model_dump(mode="json"))
+        except ExtractionThrottled as exc:
+            logger.warning("extraction throttled for %s (%s): %s", filename, sha256[:12], exc)
+            details = {"retry_after_ms": max(1000, round(exc.retry_after_s * 1000)), "api_keys": exc.keys, "daily_quota": exc.daily}
+            yield _event("error", error={"code": "extraction_throttled", "message": str(exc), "details": details})
         except ExtractionError as exc:
             logger.warning("extraction failed for %s (%s): %s", filename, sha256[:12], exc)
             yield _event("error", error={"code": "extraction_failed", "message": str(exc)})

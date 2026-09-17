@@ -312,7 +312,11 @@ function EngineStatus() {
       <dt className="text-ink-3">Database</dt>
       <dd>Connected</dd>
       <dt className="text-ink-3">Extraction</dt>
-      <dd className="figure">{check.health?.extraction.configured ? check.health.extraction.model : "Not configured: uploads are off"}</dd>
+      <dd className="figure">
+        {check.health?.extraction.configured
+          ? `${check.health.extraction.model}${(check.health.extraction.api_keys ?? 0) > 1 ? ` · ${check.health.extraction.api_keys} API keys` : ""}`
+          : "Not configured: uploads are off"}
+      </dd>
       <dt className="text-ink-3">API latency</dt>
       <dd className="figure">{check.latencyMs} ms</dd>
       <dt className="text-ink-3">Version</dt>

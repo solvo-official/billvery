@@ -384,6 +384,7 @@ class UpdateUserRequest(BaseModel):
 class ExtractionHealth(BaseModel):
     configured: bool
     model: str
+    api_keys: int = Field(0, description="How many Gemini API keys requests rotate through; the keys are never shown")
 
 
 class AuthHealth(BaseModel):
