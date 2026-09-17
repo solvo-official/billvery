@@ -216,3 +216,17 @@ async def test_another_tenant_cannot_read_a_stored_document(db, settings, tenant
     assert await store.fetch(db, "local://x/y", tenant.organization_id) is None
     # Saving the same bytes twice is a no-op, exactly like the content-addressed file store.
     assert await store.save(db, tenant.organization_id, sha, b"%PDF-1.4 secret") == url
+
+
+def test_blank_or_padded_environment_variables_fall_back_to_defaults(monkeypatch):
+    """Vercel dashboards end up with empty or newline-terminated values; neither may break startup."""
+    blank = {name: "" for name in ("DB_POOL", "DB_POOL_SIZE", "DB_STATEMENT_TIMEOUT_MS", "DOCUMENT_STORAGE", "MATH_TOLERANCE", "SESSION_TTL_HOURS")}
+    for name, value in {**blank, "DUPLICATE_WINDOW_DAYS": "   ", "PRICE_SPIKE_RATIO": "3.0\r\n", "JWT_SECRET": ("s" * 40) + "\r\n"}.items():
+        monkeypatch.setenv(name, value)
+    loaded = Settings(_env_file=None)
+    defaults = Settings.model_fields
+    assert loaded.db_pool == "auto" and loaded.document_storage == "auto"
+    assert loaded.db_pool_size == defaults["db_pool_size"].default
+    assert loaded.session_ttl_hours == 12 and loaded.duplicate_window_days == 90
+    assert str(loaded.math_tolerance) == "0.05" and str(loaded.price_spike_ratio) == "3.0"
+    assert loaded.jwt_secret.get_secret_value() == "s" * 40

@@ -1,9 +1,9 @@
 from decimal import Decimal
 from functools import lru_cache
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import Field, SecretStr, field_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Vercel Functions reject a request body over 4.5 MB before it reaches the app, so uploads there
@@ -14,7 +14,9 @@ VERCEL_UPLOAD_LIMIT_BYTES = 4 * 1024 * 1024
 class Settings(BaseSettings):
     """Runtime configuration, read from environment variables or a `.env` file."""
 
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    # env_ignore_empty: a variable that exists but is blank (common after pasting an example file
+    # into a hosting dashboard) means "use the default", not "parse an empty string".
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore", env_ignore_empty=True)
 
     # --- Deployment -----------------------------------------------------------------------
     # Vercel sets VERCEL=1 in builds and functions; it switches the defaults below to the ones a
@@ -82,6 +84,23 @@ class Settings(BaseSettings):
     future_date_grace_days: int = Field(1, ge=0)
 
     log_level: str = "INFO"
+
+    @model_validator(mode="before")
+    @classmethod
+    def _strip_whitespace(cls, data: Any) -> Any:
+        # Values pasted into a dashboard often carry a trailing space or line break (CRLF from a
+        # Windows clipboard). None of these settings is meaningful with surrounding whitespace, and
+        # a value that is only whitespace counts as unset.
+        if not isinstance(data, dict):
+            return data
+        cleaned: dict[str, Any] = {}
+        for key, value in data.items():
+            if isinstance(value, str):
+                value = value.strip()
+                if not value:
+                    continue
+            cleaned[key] = value
+        return cleaned
 
     @field_validator("jwt_secret")
     @classmethod
