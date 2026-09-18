@@ -32,7 +32,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
-from .enums import AnomalyStatus, ApiScope, InvoiceStatus, Severity, UserRole
+from .enums import AnomalyStatus, ApiScope, AuditAction, InvoiceStatus, Severity, UserRole
 from .money import ZERO
 
 NAMING_CONVENTION = {
@@ -334,6 +334,61 @@ class AnomalyLog(Base):
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
 
     invoice: Mapped[Invoice] = relationship(back_populates="anomalies", lazy="raise")
+
+
+class AuditLog(Base):
+    """The invoice's chain of custody: ingestion, then every reviewer decision, with its signer.
+
+    Append-only. Triggers reject updates, and deletes other than removing the whole tenant. A
+    deferred trigger on anomaly_logs refuses to commit a resolution that has no entry here, so a
+    decision can't be recorded without its signer, note and the document's hash.
+    """
+
+    __tablename__ = "audit_logs"
+    __table_args__ = (
+        # RESTRICT: an invoice with a custody record cannot be deleted.
+        ForeignKeyConstraint(
+            ["invoice_id", "organization_id"],
+            ["invoices.id", "invoices.organization_id"],
+            ondelete="RESTRICT",
+            name="fk_audit_logs_invoice_id_organization_id_invoices",
+        ),
+        Index("ix_audit_logs_invoice_id_created_at", "invoice_id", "created_at"),
+        Index("ix_audit_logs_anomaly_id", "anomaly_id"),
+        Index("ix_audit_logs_organization_id_created_at", "organization_id", "created_at"),
+        CheckConstraint(_one_of("action", AuditAction), name="action_valid"),
+        CheckConstraint("file_sha256 ~ '^[0-9a-f]{64}$'", name="file_sha256_hex"),
+        CheckConstraint(
+            "previous_status IS NULL OR " + _one_of("previous_status", InvoiceStatus), name="previous_status_valid"
+        ),
+        CheckConstraint("new_status IS NULL OR " + _one_of("new_status", InvoiceStatus), name="new_status_valid"),
+        # A reviewer decision always names its signer; only ingestion may come from an integration.
+        CheckConstraint(
+            "action = 'INGESTED' OR (user_id IS NOT NULL AND user_display_name IS NOT NULL)",
+            name="review_signed",
+        ),
+        CheckConstraint(
+            "(action IN ('ANOMALY_DISMISSED', 'ANOMALY_CONFIRMED')) = (anomaly_id IS NOT NULL)",
+            name="anomaly_reference",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    organization_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("organizations.id", ondelete="CASCADE"))
+    invoice_id: Mapped[uuid.UUID]
+    # The finding a resolution decided; empty for ingestion and approvals.
+    anomaly_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("anomaly_logs.id", ondelete="RESTRICT"))
+    user_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
+    # The signer's name as it was when they signed; later renames don't rewrite history.
+    user_display_name: Mapped[str | None] = mapped_column(String(255))
+    action: Mapped[str] = mapped_column(String(32))
+    resolution_note: Mapped[str | None] = mapped_column(Text)
+    # Empty only on entries backfilled by migration 0005, which can't know past statuses.
+    previous_status: Mapped[str | None] = mapped_column(String(20))
+    new_status: Mapped[str | None] = mapped_column(String(20))
+    file_sha256: Mapped[str] = mapped_column(CHAR(64))  # the invoice's document hash at the time
+    details: Mapped[dict[str, Any]] = _jsonb_object()
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
 
 
 class TaxRateLimit(TimestampMixin, Base):

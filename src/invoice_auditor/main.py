@@ -18,7 +18,7 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from . import __version__
-from .api import anomalies, auth, health, invoices, organization
+from .api import anomalies, audit_trail, auth, exports, health, invoices, organization, vendors
 from .config import Settings, get_settings
 from .db import Database
 from .errors import AppError
@@ -127,6 +127,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(health.router)
     app.include_router(auth.router)
     app.include_router(organization.router)
+    app.include_router(exports.router)  # before invoices: "/export" is a fixed path, not an invoice id
     app.include_router(invoices.router)
+    app.include_router(audit_trail.router)
     app.include_router(anomalies.router)
+    app.include_router(vendors.router)
     return app

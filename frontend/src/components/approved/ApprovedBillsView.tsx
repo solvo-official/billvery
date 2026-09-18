@@ -1,6 +1,7 @@
-import { Archive, CalendarRange, ChevronDown, Inbox, LoaderCircle, RotateCw, SearchX, TriangleAlert } from "lucide-react";
+import { Archive, CalendarRange, ChevronDown, FileDown, Inbox, LoaderCircle, RotateCw, SearchX, TriangleAlert } from "lucide-react";
 import { useCallback, useDeferredValue, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
+import { ExportBatchDialog } from "@/components/export/ExportBatchDialog";
 import { Pagination } from "@/components/feed/InvoiceTable";
 import { PageHeader } from "@/components/shell/PageHeader";
 import { Button } from "@/components/ui/button";
@@ -43,6 +44,7 @@ export function ApprovedBillsView() {
   const [sort, setSort] = useState<ArchiveSort>({ key: "approved", dir: "desc" });
   const [page, setPage] = useState(1);
   const [report, setReport] = useState<{ id: string; sequence: string[] | null } | null>(null);
+  const [exportingBatch, setExportingBatch] = useState(false);
   const deferredQuery = useDeferredValue(query);
 
   const approved = useMemo(() => invoices.filter((invoice) => invoice.status === "APPROVED"), [invoices]);
@@ -124,9 +126,14 @@ export function ApprovedBillsView() {
             </>
           }
           actions={
-            <Button variant="secondary" disabled={filtered.length === 0} onClick={() => exportList(filtered, "csv")}>
-              <Archive aria-hidden /> Export {filtersActive ? "filtered" : "all"} · CSV
-            </Button>
+            <>
+              <Button variant="secondary" disabled={filtered.length === 0} onClick={() => exportList(filtered, "csv")}>
+                <Archive aria-hidden /> Export {filtersActive ? "filtered" : "all"} · CSV
+              </Button>
+              <Button variant="primary" onClick={() => setExportingBatch(true)}>
+                <FileDown aria-hidden /> Export batch
+              </Button>
+            </>
           }
         />
 
@@ -261,6 +268,12 @@ export function ApprovedBillsView() {
           }}
         />
       ) : null}
+
+      <ExportBatchDialog
+        open={exportingBatch}
+        onClose={() => setExportingBatch(false)}
+        selectedIds={selectedAll.map((invoice) => invoice.invoice_id)}
+      />
 
       <AuditReportSheet
         invoiceId={report?.id ?? null}

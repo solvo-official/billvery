@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { ErrorBoundary } from "@/components/ui/error-boundary";
 import { Sheet, SheetClose, SheetContent, SheetDescription, SheetTitle } from "@/components/ui/sheet";
 import { Tooltip } from "@/components/ui/tooltip";
+import { VendorRiskBadge } from "@/components/vendors/VendorRiskBadge";
 import { isTypingTarget } from "@/hooks/use-hotkey";
 import { useNow } from "@/hooks/use-now";
 import { api, toApiError, type ApiError } from "@/lib/api";
@@ -15,6 +16,7 @@ import { anomalyFields, bySeverity, decideInvoiceStatus, riskScore, SEVERITY_RAN
 import type { DocField, InvoiceRecord, Resolution, Severity } from "@/lib/types";
 import { useAudit, useOrganization } from "@/state/audit-store";
 import { AnomalyCard } from "./AnomalyCard";
+import { AuditTrailPanel } from "./AuditTrailPanel";
 import { DocumentViewer } from "./DocumentViewer";
 import { ExtractedFields } from "./ExtractedFields";
 import { MIN_NOTE_LENGTH, ResolutionPanel, type CommitReceipt } from "./ResolutionPanel";
@@ -244,8 +246,9 @@ function InspectionBody({
               <StatusBadge status={invoice.status} openFlags={open.length} />
               {invoice.approval ? <ApprovalStamp approval={invoice.approval} now={now} pending={saving} /> : null}
             </div>
-            <SheetDescription className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-1.5 text-[12px] text-ink-3">
+            <SheetDescription className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1 text-[12px] text-ink-3">
               <span className="truncate text-ink-2">{invoice.vendor.name ?? "Unknown vendor"}</span>
+              <VendorRiskBadge vendorId={invoice.vendor_on_file?.id} />
               <span aria-hidden>·</span>
               <SourceIcon className="size-3" aria-hidden />
               <span>
@@ -342,6 +345,10 @@ function InspectionBody({
                 ))
               )}
             </section>
+
+            <ErrorBoundary label="The audit trail">
+              <AuditTrailPanel invoice={invoice} now={now} />
+            </ErrorBoundary>
           </div>
 
           <ResolutionPanel

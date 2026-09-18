@@ -109,6 +109,14 @@ async def test_database_stamps_approvals_from_any_writer(client, tenant, db):
             text("UPDATE anomaly_logs SET status = 'DISMISSED', resolved_by = :by, resolved_at = now() WHERE invoice_id = :id"),
             {"by": tenant.reviewer_id, "id": invoice["invoice_id"]},
         )
+        # Any writer must sign the decision too, or the commit is refused (see test_audit_trail).
+        await session.execute(
+            text(
+                "INSERT INTO audit_logs (organization_id, invoice_id, user_id, user_display_name, action, new_status, file_sha256)"
+                " SELECT organization_id, id, :by, 'reviewer', 'APPROVED', 'APPROVED', file_hash FROM invoices WHERE id = :id"
+            ),
+            {"by": tenant.reviewer_id, "id": invoice["invoice_id"]},
+        )
         await session.execute(text("UPDATE invoices SET status = 'APPROVED' WHERE id = :id"), {"id": invoice["invoice_id"]})
         await session.commit()
         stamped = await session.scalar(text("SELECT approved_at FROM invoices WHERE id = :id"), {"id": invoice["invoice_id"]})

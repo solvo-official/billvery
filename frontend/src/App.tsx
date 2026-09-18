@@ -1,11 +1,11 @@
 import { PlugZap, RotateCw } from "lucide-react";
+import { lazy, Suspense } from "react";
 import { Toaster } from "sonner";
 import { ApprovedBillsView } from "@/components/approved/ApprovedBillsView";
 import { ReviewView } from "@/components/review/ReviewView";
 import { DashboardSkeleton, StatsSkeleton, TableSkeleton } from "@/components/shell/DashboardSkeleton";
 import { PageHeaderSkeleton } from "@/components/shell/PageHeader";
 import { SignIn } from "@/components/shell/SignIn";
-import { TeamView } from "@/components/team/TeamView";
 import { TopBar } from "@/components/shell/TopBar";
 import { Button } from "@/components/ui/button";
 import { ErrorBoundary } from "@/components/ui/error-boundary";
@@ -15,6 +15,10 @@ import { useRoute } from "@/hooks/use-route";
 import { ThemeProvider, useTheme } from "@/hooks/use-theme";
 import type { ApiError } from "@/lib/api";
 import { AuditStoreProvider, useAudit } from "@/state/audit-store";
+
+// Secondary workspaces load on first visit, keeping the review console's bundle small.
+const TeamView = lazy(() => import("@/components/team/TeamView").then((module) => ({ default: module.TeamView })));
+const VendorsView = lazy(() => import("@/components/vendors/VendorsView").then((module) => ({ default: module.VendorsView })));
 
 export default function App() {
   return (
@@ -63,7 +67,9 @@ function Console() {
       <TopBar />
       <ErrorBoundary label="This workspace" resetKeys={[view, connection.status]} className="m-4 sm:m-6">
         {connection.status === "ready" ? (
-          view === "approved" ? <ApprovedBillsView /> : view === "team" ? <TeamView /> : <ReviewView />
+          <Suspense fallback={<ArchiveSkeleton label="Loading…" />}>
+            {view === "approved" ? <ApprovedBillsView /> : view === "vendors" ? <VendorsView /> : view === "team" ? <TeamView /> : <ReviewView />}
+          </Suspense>
         ) : connection.status === "connecting" ? (
           view === "review" ? <DashboardSkeleton /> : <ArchiveSkeleton />
         ) : connection.status === "signed-out" ? (
@@ -76,10 +82,10 @@ function Console() {
   );
 }
 
-function ArchiveSkeleton() {
+function ArchiveSkeleton({ label = "Loading approved bills…" }: { label?: string }) {
   return (
     <main className="mx-auto flex max-w-[1600px] flex-col gap-5 px-4 pb-10 pt-6 sm:px-6">
-      <LoadingLabel>Loading approved bills…</LoadingLabel>
+      <LoadingLabel>{label}</LoadingLabel>
       <PageHeaderSkeleton />
       <StatsSkeleton compact />
       <TableSkeleton rows={8} />

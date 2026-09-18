@@ -10,13 +10,14 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import Settings
-from ..enums import AnomalyStatus, InvoiceStatus
+from ..enums import AnomalyStatus, AuditAction, InvoiceStatus
 from ..errors import AppError, Conflict, NotFound
 from ..models import AnomalyLog, Invoice, InvoiceItem, Organization
 from ..money import ZERO, quantize
 from ..schemas.api import ProcessInvoiceRequest
 from ..schemas.extraction import ExtractedLineItem
 from .anomaly_detection import AnomalyDetectionService, Finding, VendorResolution, decide_invoice_status, utcnow
+from .audit_trail import audit_entry
 from .normalization import normalize_description, normalize_invoice_number
 from .tenancy import get_active_member, lock_organization
 
@@ -79,8 +80,9 @@ class InvoiceProcessor:
                     )
                 return ProcessOutcome(existing.id, replayed=True)
 
+        uploader = None
         if request.uploaded_by is not None:
-            await get_active_member(self.session, organization_id, request.uploaded_by)
+            uploader = await get_active_member(self.session, organization_id, request.uploaded_by)
 
         extraction = request.extraction
         detector = AnomalyDetectionService(self.session, self.settings, clock=self.clock)
@@ -97,6 +99,17 @@ class InvoiceProcessor:
         invoice.items = items
         invoice.anomalies = [self._anomaly_row(invoice, finding) for finding in findings]
         self.session.add(invoice)
+        await self.session.flush()
+        # The first link in the chain of custody: which file arrived, from whom, and the verdict.
+        self.session.add(
+            audit_entry(
+                invoice,
+                AuditAction.INGESTED,
+                user=uploader,
+                new_status=invoice.status,
+                details={"source": "upload" if uploader is not None else "api", "findings": len(findings)},
+            )
+        )
         await self.session.flush()
 
         logger.info(

@@ -1,11 +1,13 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useReducer, useRef, type ReactNode } from "react";
 import { ApiError, MAX_UPLOAD_BYTES, api, toApiError } from "@/lib/api";
 import { DAY } from "@/lib/dates";
-import type { Health, InvoiceRecord, Organization, Session, User } from "@/lib/types";
+import type { Health, InvoiceRecord, Organization, Session, User, VendorScorecard } from "@/lib/types";
 
 /** How far back the console loads history: covers the 30-day metrics, their prior period and 12-week trends. */
 const HISTORY_DAYS = 90;
 const POLL_INTERVAL_MS = 10_000;
+/** Scorecards are re-read this long after the ledger last changed, so a burst of changes costs one request. */
+const VENDOR_REFRESH_DELAY_MS = 2_000;
 /** Poll from a little before the last server time so slow-committing transactions aren't missed. */
 const POLL_OVERLAP_MS = 30_000;
 /** The Approved Bills archive loads every approved invoice, newest first, up to this many. */
@@ -25,6 +27,16 @@ export type ArchiveState =
   | { status: "ready"; error: null; truncated: boolean }
   | { status: "error"; error: ApiError; truncated: boolean };
 
+/** Vendor risk scorecards, riskiest first. They load after the ledger and follow its changes. */
+export interface VendorsState {
+  status: "idle" | "ready" | "error";
+  list: VendorScorecard[];
+  byId: Record<string, VendorScorecard>;
+  error: ApiError | null;
+}
+
+const NO_VENDORS: VendorsState = { status: "idle", list: [], byId: {}, error: null };
+
 interface AuditState {
   connection: Connection;
   session: Session | null;
@@ -39,6 +51,7 @@ interface AuditState {
   pending: Record<string, true>;
   truncated: boolean;
   archive: ArchiveState;
+  vendors: VendorsState;
   live: boolean;
   syncError: ApiError | null;
   lastSyncAt: number | null;
@@ -70,6 +83,8 @@ type Action =
   | { type: "archive/start" }
   | { type: "archive/success"; truncated: boolean }
   | { type: "archive/failure"; error: ApiError }
+  | { type: "vendors/success"; list: VendorScorecard[] }
+  | { type: "vendors/failure"; error: ApiError }
   | { type: "sync/result"; error: ApiError | null }
   | { type: "live/set"; live: boolean }
   | { type: "reviewer/set"; reviewerId: string }
@@ -117,6 +132,7 @@ function reducer(state: AuditState, action: Action): AuditState {
         invoices: [...action.invoices].sort(byNewest),
         truncated: action.truncated,
         archive: IDLE_ARCHIVE,
+        vendors: NO_VENDORS,
         pending: {},
         reviewerId: action.reviewerId,
         syncError: null,
@@ -147,6 +163,14 @@ function reducer(state: AuditState, action: Action): AuditState {
       return { ...state, archive: { status: "ready", error: null, truncated: action.truncated } };
     case "archive/failure":
       return { ...state, archive: { status: "error", error: action.error, truncated: state.archive.truncated } };
+    case "vendors/success":
+      return {
+        ...state,
+        vendors: { status: "ready", list: action.list, byId: Object.fromEntries(action.list.map((card) => [card.vendor_id, card])), error: null },
+      };
+    case "vendors/failure":
+      // Keep the last good scorecards on screen; the next ledger change tries again.
+      return { ...state, vendors: { ...state.vendors, status: state.vendors.list.length ? "ready" : "error", error: action.error } };
     case "sync/result":
       return { ...state, syncError: action.error, lastSyncAt: action.error ? state.lastSyncAt : Date.now() };
     case "live/set":
@@ -208,6 +232,10 @@ interface AuditStore {
   pending: Record<string, true>;
   truncated: boolean;
   archive: ArchiveState;
+  vendors: VendorsState;
+  /** The scorecard for a vendor on file, once loaded. */
+  vendorScorecard: (vendorId: string | null | undefined) => VendorScorecard | null;
+  reloadVendors: () => void;
   live: boolean;
   syncError: ApiError | null;
   lastSyncAt: number | null;
@@ -237,6 +265,7 @@ export function AuditStoreProvider({ children }: { children: ReactNode }) {
     pending: {},
     truncated: false,
     archive: IDLE_ARCHIVE,
+    vendors: NO_VENDORS,
     live: true,
     syncError: null,
     lastSyncAt: null,
@@ -244,6 +273,7 @@ export function AuditStoreProvider({ children }: { children: ReactNode }) {
   });
   const syncCursor = useRef<string | null>(null);
   const archiveRequest = useRef<AbortController | null>(null);
+  const vendorsRequest = useRef<AbortController | null>(null);
 
   const connect = useCallback(async (signal?: AbortSignal) => {
     archiveRequest.current?.abort();
@@ -312,6 +342,33 @@ export function AuditStoreProvider({ children }: { children: ReactNode }) {
     if (ready && archiveIdle) void loadArchive();
   }, [ready, archiveIdle, loadArchive]);
   useEffect(() => () => archiveRequest.current?.abort(), []);
+
+  const loadVendors = useCallback(async () => {
+    vendorsRequest.current?.abort();
+    const controller = new AbortController();
+    vendorsRequest.current = controller;
+    try {
+      const list = await api.vendorScorecards(controller.signal);
+      if (!controller.signal.aborted) dispatch({ type: "vendors/success", list });
+    } catch (error) {
+      const failure = toApiError(error);
+      if (!controller.signal.aborted && !failure.aborted) dispatch({ type: "vendors/failure", error: failure });
+    }
+  }, []);
+
+  // Scorecards aggregate the whole ledger on the server: load them once connected, then again
+  // shortly after anything in the ledger changes (a poll, an upload, a review).
+  const vendorsRequested = useRef(false);
+  useEffect(() => {
+    if (!ready) {
+      vendorsRequested.current = false;
+      return;
+    }
+    const timer = window.setTimeout(() => void loadVendors(), vendorsRequested.current ? VENDOR_REFRESH_DELAY_MS : 0);
+    vendorsRequested.current = true;
+    return () => window.clearTimeout(timer);
+  }, [ready, state.invoices, loadVendors]);
+  useEffect(() => () => vendorsRequest.current?.abort(), []);
 
   // Live feed: poll for anything created or changed since the last sync.
   useEffect(() => {
@@ -391,6 +448,9 @@ export function AuditStoreProvider({ children }: { children: ReactNode }) {
       pending: state.pending,
       truncated: state.truncated,
       archive: state.archive,
+      vendors: state.vendors,
+      vendorScorecard: (vendorId) => (vendorId ? state.vendors.byId[vendorId] ?? null : null),
+      reloadVendors: () => void loadVendors(),
       live: state.live,
       syncError: state.syncError,
       lastSyncAt: state.lastSyncAt,
@@ -410,7 +470,7 @@ export function AuditStoreProvider({ children }: { children: ReactNode }) {
       setPending,
       userName: (userId) => (userId ? names.get(userId) ?? `User ${userId.slice(0, 8)}` : "—"),
     };
-  }, [state, connect, loadArchive, merge, remove, setPending]);
+  }, [state, connect, loadArchive, loadVendors, merge, remove, setPending]);
 
   return <AuditContext value={store}>{children}</AuditContext>;
 }

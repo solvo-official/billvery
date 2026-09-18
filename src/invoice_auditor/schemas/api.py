@@ -5,10 +5,10 @@ from datetime import date, datetime
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from ..enums import AnomalyStatus, AnomalyType, InvoiceStatus, Severity, UserRole
-from ..models import AnomalyLog, Invoice, InvoiceItem, Organization, User, Vendor
+from ..enums import AnomalyStatus, AnomalyType, AuditAction, InvoiceStatus, Severity, UserRole, VendorRiskTier
+from ..models import AnomalyLog, AuditLog, Invoice, InvoiceItem, Organization, User, Vendor
 from .extraction import ExtractedLineItem, InvoiceExtraction
 from .types import AmountOut, OptionalText2000
 
@@ -420,6 +420,109 @@ class ResolveAnomalyResponse(BaseModel):
     anomaly: AnomalyOut
     invoice_id: UUID
     invoice_status: InvoiceStatus
+
+
+# --- Audit trail and tamper verification ----------------------------------------------------------
+
+
+class AuditLogOut(BaseModel):
+    """One entry in an invoice's chain of custody. Entries are never edited or deleted."""
+
+    id: UUID
+    invoice_id: UUID
+    anomaly_id: UUID | None = Field(description="The finding a resolution decided.")
+    action: AuditAction
+    user_id: UUID | None = Field(description="The signer; null only for ingestion through an integration.")
+    user_display_name: str | None = Field(description="The signer's name when they signed.")
+    resolution_note: str | None
+    previous_status: InvoiceStatus | None
+    new_status: InvoiceStatus | None = Field(description="Null only on entries backfilled from before the audit trail existed.")
+    file_sha256: str = Field(description="The document's SHA-256 as recorded at the time.")
+    details: dict[str, Any]
+    created_at: datetime
+
+    @classmethod
+    def from_model(cls, entry: AuditLog) -> "AuditLogOut":
+        return cls(
+            id=entry.id,
+            invoice_id=entry.invoice_id,
+            anomaly_id=entry.anomaly_id,
+            action=AuditAction(entry.action),
+            user_id=entry.user_id,
+            user_display_name=entry.user_display_name,
+            resolution_note=entry.resolution_note,
+            previous_status=InvoiceStatus(entry.previous_status) if entry.previous_status else None,
+            new_status=InvoiceStatus(entry.new_status) if entry.new_status else None,
+            file_sha256=entry.file_sha256,
+            details=entry.details,
+            created_at=entry.created_at,
+        )
+
+
+class IntegrityOut(BaseModel):
+    """Tamper check: the stored original re-hashed and compared with the ingestion record."""
+
+    invoice_id: UUID
+    status: Literal["verified", "tampered", "unavailable"] = Field(
+        description="verified: all hashes match. tampered: something differs. unavailable: the original isn't stored here."
+    )
+    recorded_sha256: str
+    ingested_sha256: str | None = Field(description="From the immutable INGESTED entry.")
+    computed_sha256: str | None = Field(description="SHA-256 of the stored bytes, computed for this response.")
+    computed_size_bytes: int | None
+    trail_consistent: bool = Field(description="Every audit entry carries the invoice's recorded hash.")
+    checked_at: datetime
+    message: str
+
+
+# --- Vendor risk scorecards -------------------------------------------------------------------------
+
+
+class VendorRiskOut(BaseModel):
+    tier: VendorRiskTier
+    reasons: list[str] = Field(description="What decided the tier, most serious first.")
+
+
+class VendorScorecardOut(BaseModel):
+    vendor_id: UUID
+    name: str
+    tax_id: str | None
+    first_seen_at: datetime
+    last_invoice_at: datetime
+    total_invoices: int
+    held_for_review: int = Field(description="Invoices the rule engine sent to NEEDS_REVIEW.")
+    flag_rate_percent: float = Field(description="held_for_review as a percentage of total_invoices.")
+    duplicate_invoices: int = Field(description="Invoices flagged as possible duplicates, whatever the decision.")
+    confirmed_duplicates: int
+    duplicate_rate_percent: float
+    rejected_invoices: int
+    in_review: int = Field(description="Waiting for a reviewer now.")
+    risk: VendorRiskOut
+
+
+# --- ERP export -------------------------------------------------------------------------------------
+
+MAX_EXPORT_SELECTION = 5_000
+
+
+class ExportBatchRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    format: Literal["accounting_csv", "erp_json"] = Field(
+        description="accounting_csv: QuickBooks / Xero bill import. erp_json: SAP / NetSuite vendor-bill batch."
+    )
+    scope: Literal["all", "approved", "selected"] = Field(
+        description="all: every audited invoice. approved: approved bills only. selected: the invoice_ids given."
+    )
+    invoice_ids: list[UUID] = Field(default_factory=list, max_length=MAX_EXPORT_SELECTION)
+
+    @model_validator(mode="after")
+    def _ids_match_scope(self) -> "ExportBatchRequest":
+        if self.scope == "selected" and not self.invoice_ids:
+            raise ValueError("scope 'selected' needs at least one invoice id")
+        if self.scope != "selected" and self.invoice_ids:
+            raise ValueError("invoice_ids are only used with scope 'selected'")
+        return self
 
 
 class ErrorDetail(BaseModel):

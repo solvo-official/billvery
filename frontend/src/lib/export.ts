@@ -108,7 +108,12 @@ export type ExportFormat = "csv" | "json";
 
 /** Hands the browser a generated file. */
 export function downloadFile(filename: string, content: string, type: string) {
-  const url = URL.createObjectURL(new Blob([content], { type }));
+  downloadBlob(filename, new Blob([content], { type }));
+}
+
+/** Hands the browser a file it already holds, e.g. a batch the server built. */
+export function downloadBlob(filename: string, blob: Blob) {
+  const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
   link.download = filename;

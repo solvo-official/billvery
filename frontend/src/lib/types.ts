@@ -226,6 +226,80 @@ export interface ApproveInvoiceRequest {
   note: string | null;
 }
 
+// --- Audit trail (GET /api/v1/invoices/{id}/audit-trail) ------------------------------------
+
+export type AuditAction = "INGESTED" | "ANOMALY_DISMISSED" | "ANOMALY_CONFIRMED" | "APPROVED";
+
+/** One entry in an invoice's chain of custody. The server never edits or deletes these. */
+export interface AuditLogEntry {
+  id: Uuid;
+  invoice_id: Uuid;
+  /** the finding a resolution decided */
+  anomaly_id: Uuid | null;
+  action: AuditAction;
+  /** null only when an integration submitted the invoice */
+  user_id: Uuid | null;
+  /** the signer's name when they signed */
+  user_display_name: string | null;
+  resolution_note: string | null;
+  previous_status: InvoiceStatus | null;
+  /** null only on entries backfilled from before the audit trail existed */
+  new_status: InvoiceStatus | null;
+  file_sha256: string;
+  details: Record<string, unknown>;
+  created_at: IsoDateTime;
+}
+
+/** GET /api/v1/invoices/{id}/integrity: the stored original re-hashed on the server. */
+export interface IntegrityReport {
+  invoice_id: Uuid;
+  /** verified: every hash matches. tampered: something differs. unavailable: the original isn't stored here. */
+  status: "verified" | "tampered" | "unavailable";
+  recorded_sha256: string;
+  ingested_sha256: string | null;
+  computed_sha256: string | null;
+  computed_size_bytes: number | null;
+  trail_consistent: boolean;
+  checked_at: IsoDateTime;
+  message: string;
+}
+
+// --- Vendor risk (GET /api/v1/vendors/scorecards) --------------------------------------------
+
+export type VendorRiskTier = "LOW" | "MEDIUM" | "HIGH";
+
+export interface VendorScorecard {
+  vendor_id: Uuid;
+  name: string;
+  tax_id: string | null;
+  first_seen_at: IsoDateTime;
+  last_invoice_at: IsoDateTime;
+  total_invoices: number;
+  /** sent to NEEDS_REVIEW by the rule engine */
+  held_for_review: number;
+  flag_rate_percent: number;
+  /** flagged as possible duplicates, whatever the decision */
+  duplicate_invoices: number;
+  confirmed_duplicates: number;
+  duplicate_rate_percent: number;
+  rejected_invoices: number;
+  /** waiting for a reviewer now */
+  in_review: number;
+  risk: { tier: VendorRiskTier; reasons: string[] };
+}
+
+// --- ERP export (POST /api/v1/invoices/export) ------------------------------------------------
+
+/** accounting_csv: QuickBooks / Xero bill import. erp_json: SAP / NetSuite vendor-bill batch. */
+export type BatchFormat = "accounting_csv" | "erp_json";
+export type BatchScope = "all" | "approved" | "selected";
+
+export interface ExportBatchRequest {
+  format: BatchFormat;
+  scope: BatchScope;
+  invoice_ids?: Uuid[];
+}
+
 /** One line of the NDJSON stream from POST /api/v1/invoices/upload */
 export type UploadEvent =
   | { event: "received"; filename: string; content_type: string; size_bytes: number; sha256: string }

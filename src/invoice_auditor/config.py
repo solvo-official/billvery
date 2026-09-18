@@ -145,6 +145,15 @@ class Settings(BaseSettings):
     stale_invoice_days: int = Field(365, ge=1)
     future_date_grace_days: int = Field(1, ge=0)
 
+    # --- Vendor risk scorecard (percent of a vendor's invoices) ----------------------------
+    vendor_risk_medium_flag_rate: float = Field(20.0, ge=0, le=100, description="Held for review at least this often: MEDIUM")
+    vendor_risk_high_flag_rate: float = Field(50.0, ge=0, le=100, description="Held for review at least this often: HIGH")
+    vendor_risk_high_duplicate_rate: float = Field(25.0, ge=0, le=100, description="Flagged as a possible duplicate this often: HIGH")
+    vendor_risk_min_history: int = Field(3, ge=1, description="Fewer invoices than this can't make a vendor HIGH on rates alone")
+
+    # --- ERP export ---------------------------------------------------------------------------
+    export_max_invoices: int = Field(2_000, ge=1, description="Per batch; keeps a response under serverless body limits")
+
     log_level: str = "INFO"
 
     @model_validator(mode="before")

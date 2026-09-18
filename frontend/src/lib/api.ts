@@ -15,7 +15,11 @@
 import {
   INVOICE_STATUSES,
   type ApproveInvoiceRequest,
+  type AuditLogEntry,
+  type ExportBatchRequest,
+  type IntegrityReport,
   type InviteUserRequest,
+  type VendorScorecard,
   type Session,
   type UpdateOrganizationRequest,
   type UpdateUserRequest,
@@ -188,6 +192,34 @@ function resolution(value: unknown): ResolveAnomalyResponse {
   return value as unknown as ResolveAnomalyResponse;
 }
 
+function auditTrail(value: unknown): AuditLogEntry[] {
+  if (!Array.isArray(value) || !value.every((entry) => isObject(entry) && typeof entry.action === "string" && typeof entry.file_sha256 === "string")) {
+    malformed("audit trail");
+  }
+  return value as AuditLogEntry[];
+}
+
+function integrity(value: unknown): IntegrityReport {
+  if (!isObject(value) || typeof value.status !== "string" || typeof value.recorded_sha256 !== "string") malformed("integrity report");
+  return value as unknown as IntegrityReport;
+}
+
+function scorecards(value: unknown): VendorScorecard[] {
+  if (!Array.isArray(value) || !value.every((card) => isObject(card) && typeof card.vendor_id === "string" && isObject(card.risk))) {
+    malformed("vendor scorecard list");
+  }
+  return value as VendorScorecard[];
+}
+
+/** The filename from `Content-Disposition: attachment; filename="..."`. */
+function attachmentName(response: Response, fallback: string): string {
+  const match = /filename="?([^";]+)"?/i.exec(response.headers.get("content-disposition") ?? "");
+  return match?.[1] ?? fallback;
+}
+
+/** Batch exports can run longer than an ordinary call: the server serializes every invoice. */
+const EXPORT_TIMEOUT_MS = 120_000;
+
 // --- Calls -------------------------------------------------------------------------------------
 
 export interface ListParams {
@@ -295,6 +327,29 @@ export const api = {
   approve: (invoiceId: string, body: ApproveInvoiceRequest) => request(`/api/v1/invoices/${invoiceId}/approve`, json(body), invoice),
 
   documentUrl: (invoiceId: string) => `${BASE}/api/v1/invoices/${invoiceId}/document`,
+
+  /** The invoice's chain of custody, oldest first. */
+  auditTrail: (invoiceId: string, signal?: AbortSignal) =>
+    request(`/api/v1/invoices/${invoiceId}/audit-trail`, { signal, cache: "no-store" }, auditTrail),
+
+  /** Tamper check: the server re-hashes the stored original against the ingestion record. */
+  integrity: (invoiceId: string, signal?: AbortSignal) =>
+    request(`/api/v1/invoices/${invoiceId}/integrity`, { signal, cache: "no-store" }, integrity),
+
+  /** Every vendor's aggregated audit history with its risk tier, riskiest first. */
+  vendorScorecards: (signal?: AbortSignal) => request("/api/v1/vendors/scorecards", { signal, cache: "no-store" }, scorecards),
+
+  /** Builds an ERP / accounting batch file on the server and returns it for download. */
+  async exportBatch(body: ExportBatchRequest): Promise<{ blob: Blob; filename: string; count: number }> {
+    const response = await send(
+      "/api/v1/invoices/export",
+      { ...json(body), headers: { "Content-Type": "application/json", Accept: "text/csv, application/json" } },
+      EXPORT_TIMEOUT_MS,
+    );
+    if (!response.ok) throw await readError(response);
+    const fallback = `billvery-${body.scope}.${body.format === "accounting_csv" ? "csv" : "json"}`;
+    return { blob: await response.blob(), filename: attachmentName(response, fallback), count: Number(response.headers.get("x-export-count") ?? 0) };
+  },
 
   /**
    * Upload a document for extraction and audit. The server answers with an NDJSON stream of

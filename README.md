@@ -86,6 +86,11 @@ repo root
 5. **Check.** `https://<your-project>.vercel.app/healthz` should report `database: ok`,
    `auth.google: true` and `limits.max_upload_bytes: 4194304`.
 
+**Upgrading to the audit trail (0005, 0006).** Order matters because 0006 makes the database refuse
+reviews the previous release records: run `invoice-auditor migrate --revision 0005`, deploy, then
+`invoice-auditor migrate` (to head). 0006 signs, in retrospect, whatever the previous release
+ingested or resolved in between.
+
 | Variable | Required | Value |
 | --- | --- | --- |
 | `DATABASE_URL` | yes | Neon **pooled** URL, exactly as Neon shows it (`?sslmode=require` is handled) |
@@ -216,6 +221,68 @@ or `503` when the database is unreachable.
 an active `owner`, `admin` or `reviewer` of the organization. An anomaly can be resolved once
 (`409` afterwards). The response includes the re-derived invoice status.
 
+### `GET /api/v1/invoices/{id}/audit-trail`
+
+The invoice's chain of custody (`audit_logs`), oldest first. `INGESTED` carries the SHA-256 of the
+document and the rule engine's verdict; each reviewer decision (`ANOMALY_DISMISSED`,
+`ANOMALY_CONFIRMED`, `APPROVED`) carries the signer (`user_id` and their name at the time), the
+note, `previous_status` → `new_status` and the document hash. Entries migrated from before the
+trail existed have `details.backfilled: true` and no statuses.
+
+### `GET /api/v1/invoices/{id}/integrity`
+
+Tamper check. Re-hashes the stored original and compares it with the hash on the invoice and in
+its immutable `INGESTED` entry: `verified`, `tampered` (with the differing hashes), or
+`unavailable` when the original came through `/process` and isn't stored here (the recorded hashes
+are still compared).
+
+### `GET /api/v1/vendors/scorecards`
+
+Every vendor's history over the whole ledger, riskiest first: invoices, how many the rule engine
+held for review (`flag_rate_percent`), possible and confirmed duplicates, rejections, and a
+`risk.tier` of `LOW`, `MEDIUM` or `HIGH` with the `reasons` behind it. HIGH: a rejected invoice, a
+confirmed duplicate, or (with at least `VENDOR_RISK_MIN_HISTORY` invoices) a flag rate of
+`VENDOR_RISK_HIGH_FLAG_RATE`% or a duplicate rate of `VENDOR_RISK_HIGH_DUPLICATE_RATE`%. MEDIUM: a
+flag rate of `VENDOR_RISK_MEDIUM_FLAG_RATE`% or an unconfirmed duplicate. `vendor_id` (repeatable)
+narrows the list.
+
+### `POST /api/v1/invoices/export`
+
+```json
+{"format": "accounting_csv", "scope": "approved"}
+{"format": "erp_json", "scope": "selected", "invoice_ids": ["…", "…"]}
+```
+
+`scope`: `approved`, `all` (every status except PROCESSING) or `selected`. Returns the file as an
+attachment, oldest invoice first, with `X-Export-Count` and `X-Export-Batch-Id`; a batch holds up
+to `EXPORT_MAX_INVOICES` (2,000, `413` beyond). Needs `invoices:read`.
+
+`accounting_csv` is the QuickBooks Online / Xero bill-import layout, one row per line item with the
+header fields repeated (importers group rows by `InvoiceNumber`): `InvoiceNumber, VendorName,
+IssueDate, DueDate, LineItemDescription, LineItemQuantity, LineItemUnitPrice, LineItemAmount,
+TaxAmount, TotalAmount, Currency`. Dates are ISO 8601; text starting with `= + - @` gets a leading
+apostrophe so it can't run as a spreadsheet formula.
+
+`erp_json` (`billvery.ap-batch/v1`) is a batch envelope with `control_totals` per currency and one
+vendor-bill document per invoice. Its fields map to the two ERPs' vendor-bill APIs like this;
+company code, subsidiary, GL accounts and tax codes come from your integration's configuration:
+
+| Billvery | SAP S/4HANA `A_SupplierInvoice` | NetSuite `vendorBill` |
+|---|---|---|
+| `external_id` | `AssignmentReference` | `externalId` |
+| `supplier.external_id` / `supplier.tax_id` | `InvoicingParty` (via your supplier mapping) | `entity` (via your vendor mapping) |
+| `supplier_invoice_number` | `SupplierInvoiceIDByInvcgParty` | `tranId` |
+| `document_date` | `DocumentDate` | `tranDate` |
+| `due_date` | `DueCalculationBaseDate` + payment terms | `dueDate` |
+| `currency` | `DocumentCurrency` | `currency` |
+| `amounts.gross` | `InvoiceGrossAmount` | `total` (computed by NetSuite) |
+| `amounts.tax` | tax item amounts | `taxTotal` |
+| `lines[].description / quantity / unit_price / amount` | `to_SupplierInvoiceItemGLAcct` items | `expense.items` or `item.items` (`memo`/`description`, `quantity`, `rate`, `amount`) |
+| `attachment.sha256` | attachment note | custom field or file note |
+
+The console's **Export batch** (audit feed and Approved Bills) calls this endpoint; tick rows to
+export a selection.
+
 ## Status machine
 
 | Status | When |
@@ -256,6 +323,11 @@ reported, never merged automatically.
 - **Immutable audit log**: triggers reject any change to a finding and any change after
   resolution, and reject deletes except when the whole organization is deleted. An invoice or
   vendor with dependants cannot be deleted (`RESTRICT`).
+- **Signed chain of custody** (migrations 0005 and 0006): `audit_logs` is append-only (updates
+  always refused, deletes only with the tenant) and review entries must name their signer. Stored
+  originals in `documents` can't be rewritten. From 0006, a deferred constraint trigger refuses to
+  commit any anomaly resolution, from any writer, that has no `audit_logs` entry written in the same
+  transaction.
 - **No races on duplicate checks**: `/process` takes a per-organization transaction-level
   advisory lock, so concurrent submissions of the same invoice are serialized.
 - **Exact money**: `NUMERIC(18,4)` everywhere; amounts are parsed from JSON straight into

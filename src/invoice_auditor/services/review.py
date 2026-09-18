@@ -7,11 +7,12 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..enums import AnomalyStatus, InvoiceStatus, UserRole
+from ..enums import AnomalyStatus, AuditAction, InvoiceStatus, UserRole
 from ..errors import Conflict, Forbidden, NotFound
 from ..models import AnomalyLog, Invoice, User
 from ..schemas.api import ApproveInvoiceRequest, ResolveAnomalyRequest
 from .anomaly_detection import decide_invoice_status, utcnow
+from .audit_trail import audit_entry
 from .tenancy import get_active_member
 
 logger = logging.getLogger(__name__)
@@ -119,6 +120,20 @@ class AnomalyReviewService:
         # Touch the invoice even when its status is unchanged, so that clients polling
         # GET /invoices?updated_since=... pick up the resolution (the trigger sets the value).
         invoice.updated_at = now
+        # Signed into the chain of custody in the same transaction; the database won't commit
+        # the resolution without it.
+        self.session.add(
+            audit_entry(
+                invoice,
+                AuditAction.ANOMALY_CONFIRMED if anomaly.status == AnomalyStatus.CONFIRMED else AuditAction.ANOMALY_DISMISSED,
+                user=reviewer,
+                anomaly_id=anomaly.id,
+                note=request.note,
+                previous_status=previous_status,
+                new_status=status,
+                details={"anomaly_type": anomaly.anomaly_type, "severity": anomaly.severity},
+            )
+        )
         await self.session.flush()
 
         logger.info(
@@ -168,6 +183,18 @@ class AnomalyReviewService:
         invoice.approved_at = now
         invoice.approved_by = reviewer.id
         invoice.updated_at = now
+        # One signed entry covers every finding the approval dismissed.
+        self.session.add(
+            audit_entry(
+                invoice,
+                AuditAction.APPROVED,
+                user=reviewer,
+                note=note,
+                previous_status=status,
+                new_status=InvoiceStatus.APPROVED,
+                details={"dismissed_anomalies": [str(finding.id) for finding in open_findings]},
+            )
+        )
         await self.session.flush()
 
         logger.info(

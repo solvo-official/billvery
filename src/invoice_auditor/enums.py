@@ -64,3 +64,23 @@ class ApiScope(StrEnum):
     INVOICES_WRITE = "invoices:write"
     INVOICES_READ = "invoices:read"
     ANOMALIES_RESOLVE = "anomalies:resolve"
+
+
+class AuditAction(StrEnum):
+    """What an `audit_logs` entry records."""
+
+    INGESTED = "INGESTED"  # stored and audited by the rule engine; carries the file's SHA-256
+    ANOMALY_DISMISSED = "ANOMALY_DISMISSED"
+    ANOMALY_CONFIRMED = "ANOMALY_CONFIRMED"
+    APPROVED = "APPROVED"  # Approve & Archive: every open finding dismissed at once
+
+    @property
+    def is_review(self) -> bool:
+        """A person's decision: the entry must name its signer."""
+        return self is not AuditAction.INGESTED
+
+
+class VendorRiskTier(StrEnum):
+    LOW = "LOW"
+    MEDIUM = "MEDIUM"
+    HIGH = "HIGH"

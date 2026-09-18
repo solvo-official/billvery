@@ -1,4 +1,4 @@
-import { Archive, Check, ChevronDown, Copy, Inbox, LoaderCircle, LogOut, Monitor, Moon, Plus, Settings, Sun, UserCheck, Users, type LucideIcon } from "lucide-react";
+import { Archive, Check, ChevronDown, Copy, Inbox, LoaderCircle, LogOut, Monitor, Moon, Plus, Settings, Store, Sun, UserCheck, Users, type LucideIcon } from "lucide-react";
 import { toast } from "sonner";
 import { useEffect, useState } from "react";
 import { Avatar } from "@/components/audit/status";
@@ -61,13 +61,14 @@ function Brand() {
 const NAV: { view: View; label: string; icon: LucideIcon }[] = [
   { view: "review", label: "Review", icon: Inbox },
   { view: "approved", label: "Approved Bills", icon: Archive },
+  { view: "vendors", label: "Vendors", icon: Store },
   { view: "team", label: "Team", icon: Users },
 ];
 
 /** Workspace tabs, underlined like a document's section tabs. Counts update with every approval. */
 function PrimaryNav() {
   const { view, href } = useRoute();
-  const { connection, invoices, archive, users } = useAudit();
+  const { connection, invoices, archive, users, vendors } = useAudit();
   const ready = connection.status === "ready";
   let review = 0;
   let approved = 0;
@@ -76,9 +77,12 @@ function PrimaryNav() {
     else if (invoice.status === "APPROVED") approved += 1;
   }
   const failed = connection.status === "error";
+  const highRisk = vendors.list.filter((card) => card.risk.tier === "HIGH").length;
   const counts: Record<View, number | null> = {
     review: ready ? review : null,
     approved: ready && (archive.status === "ready" || archive.status === "error") ? approved : null,
+    // High-risk vendors when there are any, so the tab says whether it needs a look.
+    vendors: ready && vendors.status !== "idle" ? (highRisk || vendors.list.length) : null,
     team: ready ? users.length : null,
   };
 
@@ -107,9 +111,25 @@ function PrimaryNav() {
                   key={count}
                   className={cn(
                     "figure inline-flex h-[18px] min-w-6 animate-pop-in items-center justify-center rounded-full px-1.5 text-[11px]",
-                    target === "review" && count > 0 ? "bg-review/15 text-review" : target === "approved" ? "bg-approved/12 text-approved" : "bg-ink-3/10 text-ink-2",
+                    target === "review" && count > 0
+                      ? "bg-review/15 text-review"
+                      : target === "approved"
+                        ? "bg-approved/12 text-approved"
+                        : target === "vendors" && highRisk > 0
+                          ? "bg-rejected/12 text-rejected"
+                          : "bg-ink-3/10 text-ink-2",
                   )}
-                  aria-label={`${count} ${target === "review" ? "waiting for review" : target === "approved" ? "approved" : "with access"}`}
+                  aria-label={`${count} ${
+                    target === "review"
+                      ? "waiting for review"
+                      : target === "approved"
+                        ? "approved"
+                        : target === "vendors"
+                          ? highRisk > 0
+                            ? "high-risk vendors"
+                            : "vendors"
+                          : "with access"
+                  }`}
                 >
                   {count.toLocaleString()}
                 </span>

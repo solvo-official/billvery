@@ -9,6 +9,7 @@ import {
   ChevronsLeft,
   ChevronsRight,
   ChevronsUpDown,
+  FileDown,
   Inbox,
   Plug,
   SearchX,
@@ -19,12 +20,16 @@ import {
 import { Tabs } from "radix-ui";
 import { useDeferredValue, useEffect, useMemo, useState } from "react";
 import { Money, RiskMeter, StatusBadge } from "@/components/audit/status";
+import { ExportBatchDialog } from "@/components/export/ExportBatchDialog";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { EmptyState } from "@/components/ui/empty-state";
 import { SearchInput } from "@/components/ui/search-input";
 import { Tooltip } from "@/components/ui/tooltip";
+import { VendorRiskBadge } from "@/components/vendors/VendorRiskBadge";
 import { useNow } from "@/hooks/use-now";
 import { navigate } from "@/hooks/use-route";
+import { useSelection } from "@/hooks/use-selection";
 import { cn } from "@/lib/cn";
 import { formatDate, relativeTime } from "@/lib/dates";
 import { convert } from "@/lib/money";
@@ -116,7 +121,11 @@ export function InvoiceTable({ selectedId, onOpen, onApprove }: InvoiceTableProp
   const [sort, setSort] = useState<Sort>({ key: "received", dir: "desc" });
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(PAGE_SIZES[0]!);
+  const [exporting, setExporting] = useState(false);
   const deferredQuery = useDeferredValue(query.trim().toLowerCase());
+  // Invoices still being extracted can't be exported, so they can't be ticked either.
+  const exportableIds = useMemo(() => invoices.filter((invoice) => invoice.status !== "PROCESSING").map((invoice) => invoice.invoice_id), [invoices]);
+  const selection = useSelection(exportableIds);
 
   useEffect(() => setPage(1), [status, deferredQuery, sort, pageSize]);
 
@@ -145,6 +154,10 @@ export function InvoiceTable({ selectedId, onOpen, onApprove }: InvoiceTableProp
   const currentPage = Math.min(page, pageCount);
   const firstIndex = (currentPage - 1) * pageSize;
   const visible = rows.slice(firstIndex, firstIndex + pageSize);
+  const tickable = visible.filter((row) => row.invoice.status !== "PROCESSING").map((row) => row.invoice.invoice_id);
+  const tickedOnPage = tickable.filter((id) => selection.has(id)).length;
+  const pageState = tickable.length > 0 && tickedOnPage === tickable.length ? true : tickedOnPage > 0 ? "indeterminate" : false;
+  const selectedIds = useMemo(() => [...selection.selected], [selection.selected]);
 
   const onSort = (key: SortKey) =>
     setSort((current) =>
@@ -189,14 +202,22 @@ export function InvoiceTable({ selectedId, onOpen, onApprove }: InvoiceTableProp
               "Updates are paused"
             )}
           </p>
-          <SearchInput
-            id="feed-search"
-            label="Search invoices"
-            value={query}
-            onChange={setQuery}
-            placeholder="Invoice no., vendor, tax ID, file"
-            className="ml-auto w-full sm:w-72"
-          />
+          <div className="ml-auto flex w-full items-center gap-2 sm:w-auto">
+            <Button variant="secondary" onClick={() => setExporting(true)} aria-label={`Export batch${selection.selected.size ? `, ${selection.selected.size} selected` : ""}`}>
+              <FileDown aria-hidden /> Export batch
+              {selection.selected.size ? (
+                <span className="figure -mr-1 rounded-full bg-accent px-1.5 text-[11px] leading-[18px] text-on-accent">{selection.selected.size}</span>
+              ) : null}
+            </Button>
+            <SearchInput
+              id="feed-search"
+              label="Search invoices"
+              value={query}
+              onChange={setQuery}
+              placeholder="Invoice no., vendor, tax ID, file"
+              className="min-w-0 flex-1 sm:w-72 sm:flex-none"
+            />
+          </div>
         </div>
 
         <Tabs.List aria-label="Filter by status" className="flex gap-1 overflow-x-auto overflow-y-hidden px-3 shadow-[inset_0_-1px_0_var(--color-line)]">
@@ -222,11 +243,12 @@ export function InvoiceTable({ selectedId, onOpen, onApprove }: InvoiceTableProp
 
         <Tabs.Content value={status} className="min-w-0 outline-none" tabIndex={-1}>
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[920px] border-collapse text-left">
+            <table className="w-full min-w-[1000px] border-collapse text-left">
               <caption className="sr-only">
                 Invoices for {organization.name}, sorted by {sort.key.replace("_", " ")} {sort.dir === "asc" ? "ascending" : "descending"}
               </caption>
               <colgroup>
+                <col className="w-[44px]" />
                 <col className="w-[156px]" />
                 <col />
                 <col className="w-[112px]" />
@@ -237,6 +259,14 @@ export function InvoiceTable({ selectedId, onOpen, onApprove }: InvoiceTableProp
               </colgroup>
               <thead>
                 <tr className="h-9 border-b border-line">
+                  <th scope="col" className="pl-4 pr-1">
+                    <Checkbox
+                      checked={pageState}
+                      disabled={tickable.length === 0}
+                      onCheckedChange={() => selection.setMany(tickable, pageState !== true)}
+                      aria-label={pageState === true ? "Clear selection on this page" : "Select every invoice on this page"}
+                    />
+                  </th>
                   <SortHeader label="Invoice #" sortKey="invoice_number" sort={sort} onSort={onSort} />
                   <SortHeader label="Vendor" sortKey="vendor" sort={sort} onSort={onSort} />
                   <SortHeader label="Issue date" sortKey="invoice_date" sort={sort} onSort={onSort} />
@@ -257,6 +287,8 @@ export function InvoiceTable({ selectedId, onOpen, onApprove }: InvoiceTableProp
                     row={row}
                     now={now}
                     selected={row.invoice.invoice_id === selectedId}
+                    checked={selection.has(row.invoice.invoice_id)}
+                    onCheck={(on) => selection.toggle(row.invoice.invoice_id, on)}
                     arrived={(touched[row.invoice.invoice_id] ?? 0) > Date.now() - ARRIVAL_HIGHLIGHT_MS}
                     canApprove={reviewer !== null}
                     approveHint={reviewBlocker}
@@ -266,7 +298,7 @@ export function InvoiceTable({ selectedId, onOpen, onApprove }: InvoiceTableProp
                 ))}
                 {visible.length === 0 ? (
                   <tr>
-                    <td colSpan={7} className="h-[340px] p-0 align-middle">
+                    <td colSpan={8} className="h-[340px] p-0 align-middle">
                       {deferredQuery ? (
                         <EmptyState icon={SearchX} title={`No invoices match “${query.trim()}”`} description="Search covers invoice numbers, vendors, tax IDs and file names.">
                           <Button size="sm" variant="secondary" onClick={() => setQuery("")}>
@@ -323,8 +355,18 @@ export function InvoiceTable({ selectedId, onOpen, onApprove }: InvoiceTableProp
           Showing the most recent 5,000 invoices of the last 90 days. Search narrows the feed; older history isn't loaded.
         </p>
       ) : null}
-      <footer className="flex h-11 flex-wrap items-center justify-between gap-3 border-t border-line px-4 text-[12px] text-ink-3">
+      <footer className="flex min-h-11 flex-wrap items-center justify-between gap-3 border-t border-line px-4 py-1.5 text-[12px] text-ink-3">
         <div className="flex items-center gap-2">
+          {selection.selected.size > 0 ? (
+            <span className="mr-2 flex items-center gap-2 border-r border-line pr-3">
+              <span>
+                <span className="figure text-ink-2">{selection.selected.size}</span> selected
+              </span>
+              <button type="button" onClick={selection.clear} className="cursor-pointer font-medium text-accent hover:underline">
+                Clear
+              </button>
+            </span>
+          ) : null}
           <label htmlFor="page-size">Rows per page</label>
           <select
             id="page-size"
@@ -346,6 +388,7 @@ export function InvoiceTable({ selectedId, onOpen, onApprove }: InvoiceTableProp
           <Pagination page={currentPage} pageCount={pageCount} onPage={setPage} />
         </div>
       </footer>
+      <ExportBatchDialog open={exporting} onClose={() => setExporting(false)} selectedIds={selectedIds} />
     </section>
   );
 }
@@ -387,6 +430,8 @@ function InvoiceRow({
   row,
   now,
   selected,
+  checked,
+  onCheck,
   arrived,
   canApprove,
   approveHint,
@@ -395,7 +440,11 @@ function InvoiceRow({
 }: {
   row: Row;
   now: number;
+  /** open in the inspection drawer */
   selected: boolean;
+  /** ticked for a batch export */
+  checked: boolean;
+  onCheck: (on: boolean) => void;
   arrived: boolean;
   canApprove: boolean;
   approveHint: string | null;
@@ -416,10 +465,19 @@ function InvoiceRow({
       className={cn(
         "group h-12 border-b border-line text-[13px] transition-colors last:border-b-0",
         processing ? "cursor-default" : "cursor-pointer hover:bg-hover/60",
+        checked && "bg-accent/[0.05] hover:bg-accent/[0.08]",
         selected && "bg-hover",
         arrived && "animate-row-arrive",
       )}
     >
+      <td className="pl-4 pr-1" onClick={(event) => event.stopPropagation()}>
+        <Checkbox
+          checked={checked}
+          disabled={processing}
+          onCheckedChange={(value) => onCheck(value === true)}
+          aria-label={`Select ${invoice.invoice_number ?? invoice.document.filename} for export`}
+        />
+      </td>
       <td className="px-3 align-middle">
         {processing ? <span className="skeleton-text block h-3.5 w-24" aria-label="Invoice number pending" /> : <span className="figure block truncate text-ink">{invoice.invoice_number ?? "—"}</span>}
         <span className="mt-0.5 flex items-center gap-1 text-[11px] text-ink-3">
@@ -436,14 +494,17 @@ function InvoiceRow({
             <span className="mt-0.5 block text-[11px] text-ink-3">Extracting fields…</span>
           </>
         ) : (
-          <div className="flex min-w-0 items-center gap-2">
-            <span className="truncate text-ink">{invoice.vendor.name ?? "Unknown vendor"}</span>
-            {invoice.vendor_on_file?.first_seen ? (
-              <Tooltip content="First invoice from this vendor: the vendor record was created by it.">
-                <span className="shrink-0 rounded-full bg-accent/10 px-1.5 text-[10.5px] font-medium leading-4 text-accent ring-1 ring-inset ring-accent/20">New</span>
-              </Tooltip>
-            ) : null}
-          </div>
+          <>
+            <span className="block truncate text-ink">{invoice.vendor.name ?? "Unknown vendor"}</span>
+            <span className="mt-0.5 flex min-w-0 items-center gap-1.5 overflow-hidden" onClick={(event) => event.stopPropagation()}>
+              <VendorRiskBadge vendorId={invoice.vendor_on_file?.id} size="sm" />
+              {invoice.vendor_on_file?.first_seen ? (
+                <Tooltip content="First invoice from this vendor: the vendor record was created by it.">
+                  <span className="shrink-0 rounded-full bg-accent/10 px-1.5 text-[10.5px] font-medium leading-4 text-accent ring-1 ring-inset ring-accent/20">New</span>
+                </Tooltip>
+              ) : null}
+            </span>
+          </>
         )}
       </td>
       <td className="px-3 tabular-nums text-ink-2">
