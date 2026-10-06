@@ -358,6 +358,10 @@ class CreateWorkspaceRequest(BaseModel):
     name: str | None = Field(None, min_length=1, max_length=255, description="Defaults to \"<first name>'s workspace\".")
 
 
+ALLOWED_CURRENCIES: frozenset[str] = frozenset({"PKR", "USD", "EUR", "GBP", "AED"})
+SUPPORTED_CURRENCIES = ALLOWED_CURRENCIES
+
+
 class UpdateOrganizationRequest(BaseModel):
     """Workspace settings owners and admins can change."""
 
@@ -366,7 +370,14 @@ class UpdateOrganizationRequest(BaseModel):
     name: str | None = Field(None, min_length=1, max_length=255)
     legal_name: str | None = Field(None, max_length=255)
     country_code: str | None = Field(None, pattern=r"^[A-Za-z]{2}$", description="ISO 3166-1 alpha-2, e.g. PK.")
-    currency_code: str | None = Field(None, pattern=r"^[A-Za-z]{3}$", description="ISO 4217, e.g. PKR.")
+    currency_code: str | None = Field(None, description="ISO 4217, e.g. PKR.")
+
+    @field_validator("currency_code", mode="before")
+    @classmethod
+    def _coerce_currency(cls, value: Any) -> Any:
+        if value is not None and not isinstance(value, str):
+            return str(value)
+        return value
 
     @field_validator("country_code", "currency_code")
     @classmethod

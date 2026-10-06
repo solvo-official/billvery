@@ -6,9 +6,10 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
 from ..enums import ApiScope, UserRole
-from ..errors import Conflict, Forbidden, NotFound
+from ..errors import BadRequest, Conflict, Forbidden, NotFound
 from ..models import Organization, User
 from ..schemas.api import (
+    ALLOWED_CURRENCIES,
     ErrorResponse,
     InviteUserRequest,
     OrganizationOut,
@@ -71,12 +72,25 @@ def _guard_owner_changes(manager: User, *, target_role: UserRole, new_role: User
         raise Forbidden("Only an owner can add, change or remove owners.")
 
 
-@router.patch("/organization", response_model=OrganizationOut, responses={403: {"model": ErrorResponse}})
+@router.patch(
+    "/organization",
+    response_model=OrganizationOut,
+    responses={
+        400: {"model": ErrorResponse, "description": "Invalid settings or unsupported currency."},
+        403: {"model": ErrorResponse},
+    },
+)
 async def update_organization(payload: UpdateOrganizationRequest, manager: ManagerDep, session: SessionDep) -> OrganizationOut:
     """Rename the workspace or change its country and reporting currency (owners and admins)."""
     organization = await session.get(Organization, manager.organization_id)
     if organization is None:
         raise NotFound("Organization not found.")
+    if payload.currency_code is not None:
+        currency = payload.currency_code.strip().upper()
+        if not currency or currency not in ALLOWED_CURRENCIES:
+            raise BadRequest(
+                f"Unsupported currency '{payload.currency_code}'. Allowed currencies are: {', '.join(sorted(ALLOWED_CURRENCIES))}."
+            )
     for field, value in payload.model_dump(exclude_unset=True).items():
         if field in ("name", "currency_code") and not value:
             continue  # a workspace always keeps a name and a reporting currency

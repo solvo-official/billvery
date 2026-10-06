@@ -154,10 +154,16 @@ async def test_owners_rename_and_localize_their_workspace(client, google):
     assert updated.status_code == 200, updated.text
     body = updated.json()
     assert (body["name"], body["currency_code"], body["country_code"], body["legal_name"]) == ("Billvery Karachi", "PKR", "PK", None)
-    assert (await client.patch("/api/v1/organization", json={"currency_code": "RUPEES"}, headers=ORIGIN)).status_code == 422
+    assert (await client.patch("/api/v1/organization", json={"currency_code": "RUPEES"}, headers=ORIGIN)).status_code == 400
+    assert (await client.patch("/api/v1/organization", json={"currency_code": "XYZ"}, headers=ORIGIN)).status_code == 400
+    assert (await client.patch("/api/v1/organization", json={"currency_code": "INVALID"}, headers=ORIGIN)).status_code == 400
+    assert (await client.patch("/api/v1/organization", json={"currency_code": ""}, headers=ORIGIN)).status_code == 400
+    for allowed in ("USD", "EUR", "GBP", "AED"):
+        res = await client.patch("/api/v1/organization", json={"currency_code": allowed}, headers=ORIGIN)
+        assert res.status_code == 200 and res.json()["currency_code"] == allowed
     assert (await client.patch("/api/v1/organization", json={"name": ""}, headers=ORIGIN)).status_code == 422
     kept = await client.patch("/api/v1/organization", json={"name": None, "currency_code": None}, headers=ORIGIN)
-    assert kept.status_code == 200 and (kept.json()["name"], kept.json()["currency_code"]) == ("Billvery Karachi", "PKR")
+    assert kept.status_code == 200 and (kept.json()["name"], kept.json()["currency_code"]) == ("Billvery Karachi", "AED")
 
 
 async def test_members_cannot_change_workspace_settings(client, db, settings, tenant):

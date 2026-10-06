@@ -13,6 +13,11 @@ class AppError(Exception):
         self.details = details
 
 
+class BadRequest(AppError):
+    status_code = 400
+    code = "bad_request"
+
+
 class Unauthorized(AppError):
     status_code = 401
     code = "unauthorized"
